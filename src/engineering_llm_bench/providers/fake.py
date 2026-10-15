@@ -50,7 +50,8 @@ class FakeProvider:
     def __init__(self, cfg: ModelConfig) -> None:
         self.cfg = cfg
         self.fake = cfg.fake or FakeConfig()
-        self._info = info_from_config(cfg, ProviderCapabilities(usage_reporting=True, seed=True))
+        # usage_reporting=False: mock token counts are estimates and must not be stored as usage.
+        self._info = info_from_config(cfg, ProviderCapabilities(usage_reporting=False, seed=True))
 
     @property
     def info(self) -> ProviderInfo:

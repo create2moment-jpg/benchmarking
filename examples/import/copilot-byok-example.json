@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "format": "engineering-llm-bench/import",
+  "run": {
+    "model_label": "copilot-byok-example-model",
+    "provider_label": null,
+    "provider_model_id": null,
+    "harness": "copilot-byok-vscode",
+    "harness_version": null,
+    "captured_at": "2026-10-15T09:00:00Z",
+    "remote": true,
+    "notes": "EXAMPLE FILE: illustrates the format; the patch was written by hand, not by an IDE agent."
+  },
+  "attempts": [
+    {
+      "task_id": "python.fix-interval-merge",
+      "task_version": "1.0.0",
+      "repeat_index": 0,
+      "patch_file": "attempt.patch",
+      "elapsed_s": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "summary": "Sorted the input, merged touching intervals, validated NaN and reversed bounds.",
+      "human_notes": "No regression test was added in this example.",
+      "self_reported_passed": true,
+      "command_logs": [{"command": "pytest -q", "exit_code": 0, "output": "3 passed"}]
+    }
+  ]
+}
