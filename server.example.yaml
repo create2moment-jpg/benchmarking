@@ -1,0 +1,29 @@
+# Model-server statistics (optional). Copy to server.yaml (git-ignored) and fill in.
+# setup.sh/finish.sh then log in over SSH (read-only commands) to record, during the session:
+#   GPU utilisation / memory / power, loaded models, LLM requests and their durations (server
+#   log), token counters - next to the task scores on the dashboard.
+# Without this file only what the model's HTTP endpoint exposes is recorded.
+
+ssh:
+  target: user@gpu-server        # anything `ssh` accepts, e.g. an alias from ~/.ssh/config
+  # port: 22
+  # identity_file: ~/.ssh/id_ed25519
+  # options: [ProxyJump=bastion]  # extra `ssh -o` options
+  # Key-based login is required (runs in the background, never asks for a password):
+  # test it with   ssh -o BatchMode=yes user@gpu-server true
+
+server:
+  kind: ollama                   # ollama | vllm | llamacpp | strata | openai | auto
+  url: http://127.0.0.1:11434    # the server's URL as seen ON that machine (vLLM: :8000)
+  # Command that prints the server log since {since} (epoch seconds); used for the number and
+  # duration of LLM requests. "auto" works for Ollama (systemd journal, docker or log file);
+  # e.g. vLLM in docker:  docker logs --since {since} my-vllm-container
+  # null = do not read logs.
+  log_command: auto
+
+monitor:
+  interval_s: 5                  # sampling interval during the session
+  gpu: true                      # nvidia-smi on the server
+  extra_commands:                # recorded at start and end (any read-only command)
+    - ollama ps
+    # - strata status            # e.g. your serving tool's own status command

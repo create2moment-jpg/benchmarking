@@ -96,6 +96,61 @@ function showTab(name) {
 }
 for (const b of document.querySelectorAll("#tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
 
+// ------------------------------------------------------------------ time profile
+// Run-level profile from `bench byok finish` (server log, GPU monitor, file timestamps); older
+// runs only have the file-timestamp estimate.
+function profileOf(run) {
+  const perf = run.performance || {};
+  if (perf.profile) return perf.profile;
+  const t = perf.timing;
+  if (!t) return null;
+  return { agent_duration_s: t.observed_span_s, duration_source: "file changes", tasks: t.tasks };
+}
+const minutes = (s) => (s === null || s === undefined ? "-" : s < 90 ? `${Math.round(s)} s` : `${(s / 60).toFixed(1)} min`);
+function renderProfile(runId) {
+  const run = state.report.runs.find((r) => r.id === runId);
+  const p = run ? profileOf(run) : null;
+  const kv = (pairs) => el("div", { class: "kv" }, pairs.flatMap(([k, v]) => [el("div", {}, k), el("div", {}, v ?? "unknown")]));
+  if (!p) {
+    $("profile-kv").replaceChildren(el("div", { class: "muted" }, "No time profile recorded for this run."));
+    $("profile-tasks").replaceChildren();
+    return;
+  }
+  const gpu = p.gpu_util_peak_pct === null || p.gpu_util_peak_pct === undefined ? null
+    : `avg ${fmt(p.gpu_util_avg_pct, 0)}% (while busy ${fmt(p.gpu_util_busy_avg_pct, 0)}%), peak ${fmt(p.gpu_util_peak_pct, 0)}%`;
+  const vram = p.gpu_mem_peak_mb ? `${(p.gpu_mem_peak_mb / 1024).toFixed(1)} of ${(p.gpu_mem_total_mb / 1024).toFixed(1)} GB` : null;
+  $("profile-kv").replaceChildren(el("h3", {}, `${run.model_alias} - ${run.id}`), kv([
+    ["Agent working time", `${minutes(p.agent_duration_s)}${p.duration_source ? ` (from ${p.duration_source})` : ""}`],
+    ["Setup to finish", minutes(p.setup_to_finish_s)],
+    ["LLM requests", p.llm_requests === null || p.llm_requests === undefined ? null : `${p.llm_requests}${p.llm_request_errors ? ` (${p.llm_request_errors} errors)` : ""}`],
+    ["Model busy", p.model_time_s ? `${minutes(p.model_time_s)}${p.model_time_share ? ` (${Math.round(p.model_time_share * 100)}% of working time)` : ""}` : null],
+    ["Request latency", p.latency_p50_s ? `p50 ${fmt(p.latency_p50_s, 1)} s, p90 ${fmt(p.latency_p90_s, 1)} s, max ${fmt(p.latency_max_s, 1)} s` : null],
+    ["Tokens in / out", p.generated_tokens ? `${p.prompt_tokens ?? "?"} / ${p.generated_tokens}` : null],
+    ["Generation tok/s (server)", p.gen_tps_server ? fmt(p.gen_tps_server) : null],
+    ["GPU utilisation", gpu],
+    ["GPU memory peak", vram],
+    ["GPU power avg", p.gpu_power_avg_w ? `${fmt(p.gpu_power_avg_w, 0)} W` : null],
+    ["GPU", p.gpu_names ? p.gpu_names.join(", ") : null],
+    ["Model loaded", p.loaded_models ? p.loaded_models.join(", ") + (p.gpu_share_min !== null && p.gpu_share_min !== undefined ? ` (min ${Math.round(p.gpu_share_min * 100)}% on GPU)` : "") : null],
+    ["Server", p.server_where],
+  ]));
+  const tasks = (p.tasks || []).filter((t) => t.estimated_s !== null && t.estimated_s !== undefined);
+  const max = Math.max(1, ...tasks.map((t) => t.estimated_s));
+  $("profile-tasks").replaceChildren(...(tasks.length ? tasks.map((t) =>
+    el("div", { class: "taskbar" }, el("div", {}, t.task_id),
+      el("div", { class: "track" }, (() => { const f = el("div", { class: "fill" }); f.style.width = `${(100 * t.estimated_s) / max}%`; return f; })()),
+      el("div", { class: "num" }, minutes(t.estimated_s))))
+    : [el("div", { class: "muted" }, "No per-task times.")]));
+}
+function initProfile(r) {
+  const sel = $("profile-run");
+  const runs = r.runs.filter((run) => profileOf(run));
+  sel.replaceChildren(...runs.map((run) => el("option", { value: run.id }, `${run.model_alias} - ${(run.created_at || "").slice(0, 16).replace("T", " ")}`)));
+  sel.onchange = () => renderProfile(sel.value);
+  if (runs.length) renderProfile(runs[0].id);
+  else renderProfile(null);
+}
+
 // ------------------------------------------------------------------ overview
 function renderOverview(r) {
   const s = summarize(r.attempts);
@@ -129,11 +184,18 @@ function renderOverview(r) {
     const as = byRun[run.id] || [];
     const done = as.filter((a) => ["completed", "skipped"].includes(a.status)).length;
     const statusCls = run.status === "completed" ? "pass" : run.status === "running" ? "" : "fail";
-    return el("tr", {}, td(run.id), td((run.created_at || "").replace("T", " ")), td(el("span", { class: statusCls }, run.status)),
-      td(run.source), td(run.model_alias), td(`${run.harness} ${run.harness_version || ""}`), td(run.profile || "-"),
-      num(`${done}/${as.length}`), td(run.provider === "fake" ? el("span", { class: "chip warn" }, "mock") : ""));
+    const p = profileOf(run) || {};
+    const passed = as.filter((a) => a.passed === 1).length;
+    return el("tr", {}, td(run.id), td((run.created_at || "").replace("T", " ").slice(0, 16)), td(el("span", { class: statusCls }, run.status)),
+      td(run.model_alias), td(`${run.harness} ${run.harness_version || ""}`), td(run.profile || "-"),
+      num(`${done}/${as.length}`), num(`${passed}/${as.filter((a) => a.passed !== null && a.passed !== undefined).length}`),
+      num(minutes(p.agent_duration_s)), num(p.llm_requests ?? "-"), num(minutes(p.model_time_s)),
+      num(p.gpu_util_peak_pct === null || p.gpu_util_peak_pct === undefined ? "-" : `${fmt(p.gpu_util_avg_pct, 0)}% / ${fmt(p.gpu_util_peak_pct, 0)}%`),
+      td(run.provider === "fake" ? el("span", { class: "chip warn" }, "mock") : ""));
   });
-  setTable($("latest-runs"), ["Run", "Created", "Status", "Source", "Model", "Harness", "Profile", { label: "Done", num: true }, ""], runRows);
+  setTable($("latest-runs"), ["Run", "Created", "Status", "Model", "Harness", "Profile", { label: "Done", num: true },
+    { label: "Passed", num: true }, { label: "Duration", num: true }, { label: "LLM requests", num: true },
+    { label: "Model busy", num: true }, { label: "GPU avg / peak", num: true }, ""], runRows);
 }
 
 // ------------------------------------------------------------------ compare
@@ -239,15 +301,20 @@ function renderPerf(keys) {
     ["Model | harness", "Server", "Quant / params", { label: "Context", num: true }, { label: "GPU share", num: true },
       { label: "Gen tok/s", num: true }, { label: "Prompt tok/s", num: true }, { label: "TTFT s", num: true }, { label: "Cold load s", num: true },
       "Session tokens", { label: "Agent out tok/s", num: true }, { label: "Model s p50", num: true }, { label: "Tools s p50", num: true },
-      { label: "Eval s p50", num: true }, { label: "Eval CPU s p50", num: true }, { label: "Eval peak MB", num: true }],
+      { label: "Eval s p50", num: true }, { label: "Eval CPU s p50", num: true }, { label: "Eval peak MB", num: true },
+      { label: "Agent time", num: true }, { label: "LLM requests", num: true }, { label: "Model busy", num: true }, { label: "GPU avg / peak", num: true }],
     keys.filter((k) => groups[k]).map((k) => {
       const g = groups[k], p = g.server_perf || {}, t = g.time_profile || {}, c = g.compute || {};
+      const run = state.report.runs.find((r) => `${r.model_alias} | ${r.harness}` === k && profileOf(r));
+      const pr = (run && profileOf(run)) || {};
       return el("tr", {}, td(k), td(p.server ? `${p.server} ${p.server_version || ""}` : "unknown"),
         td(p.quantization || p.parameter_size ? `${p.quantization || "?"} / ${p.parameter_size || "?"}` : "unknown"),
         num(u(p.context_length, 0)), num(p.gpu_fraction === null || p.gpu_fraction === undefined ? "unknown" : pct(p.gpu_fraction)),
         num(u(p.gen_tps)), num(u(p.prompt_tps, 0)), num(u(p.ttft_s, 2)), num(u(p.cold_load_s, 2)),
         td(sessionTokens(p.session_tokens)), num(u(t.e2e_output_tps_median)), num(u(t.model_s_median)),
-        num(u(t.tools_and_overhead_s_median)), num(u(t.eval_s_median)), num(u(c.eval_cpu_s_median, 2)), num(u(c.eval_max_rss_mb_peak, 0)));
+        num(u(t.tools_and_overhead_s_median)), num(u(t.eval_s_median)), num(u(c.eval_cpu_s_median, 2)), num(u(c.eval_max_rss_mb_peak, 0)),
+        num(minutes(pr.agent_duration_s)), num(pr.llm_requests ?? "unknown"), num(pr.model_time_s ? minutes(pr.model_time_s) : "unknown"),
+        num(pr.gpu_util_peak_pct === null || pr.gpu_util_peak_pct === undefined ? "unknown" : `${fmt(pr.gpu_util_avg_pct, 0)}% / ${fmt(pr.gpu_util_peak_pct, 0)}%`));
     }));
 }
 
@@ -410,6 +477,7 @@ async function boot() {
     $("suite").textContent = r.runs[0] ? `suite ${r.runs[0].suite_version || "?"}` : "";
     if (!r.runs.length) { $("empty").hidden = false; $("tabs").hidden = true; return; }
     renderOverview(r);
+    initProfile(r);
     renderGroupPicker(r);
     renderCompare();
     initHistory(r);

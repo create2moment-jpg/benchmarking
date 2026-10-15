@@ -29,6 +29,10 @@ See [instructions/README.md](../instructions/README.md). In short:
 * `./finish.sh [--model-label NAME]` detects the model, scores the session in a clean
   `elb-eval` container, archives the code into the model's private folder and opens the
   dashboard.
+* With `server.yaml` (copy of [server.example.yaml](../server.example.yaml)): a background
+  monitor logs in over SSH during the session (GPU, loaded model, request gauges/counters) and
+  `finish` reads the server log (number and duration of LLM requests). Results: the run's
+  **time profile** on the dashboard Overview and in `perf_json.profile`.
 * No Docker (or `ELB_MODE=host`): host venvs instead, with a restricted auto-approve list.
   `WITH_TORCH=0` skips PyTorch everywhere.
 

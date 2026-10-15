@@ -12,6 +12,8 @@ serve=1
 for arg in "$@"; do [[ "$arg" == "--no-serve" ]] && serve=0; done
 current="$REPO/artifacts/byok_current_session.json"
 if [[ "$USE_CONTAINER" == "1" ]] && grep -q '"container_image": "' "$current" 2>/dev/null; then
+  # Stop the server monitor here (SSH works on this machine, not in the scoring container).
+  "$REPO/.venv/bin/bench" byok stop-monitor || true
   # Score in a clean copy of the agent's environment (same image, nothing the agent installed).
   tty=()
   [[ -t 0 && -t 1 ]] && tty=(-t)

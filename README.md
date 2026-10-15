@@ -28,6 +28,9 @@ commands auto-approved): **Copilot Chat → Agent → pick your model → paste 
 ```bash
 ./finish.sh     # when the agent says ALL TASKS COMPLETE: scores it and opens the dashboard
 ```
+Model on another machine? `cp server.example.yaml server.yaml` and fill in the SSH login: the
+run then also records GPU usage, LLM requests and their durations on the server. The dashboard
+shows how long each run took (overall and per task) next to the scores.
 Details: [instructions/README.md](instructions/README.md) and [byok/README.md](byok/README.md).
 
 ## Per-model output folders (invisible to other models)

@@ -22,6 +22,34 @@ When the agent replies `ALL TASKS COMPLETE`:
 
 For the next model, run `./setup.sh` again.
 
+## Time and server statistics
+
+Every run records how long the agent worked (overall and per task) and, when it can reach the
+model server, server-side statistics. They appear on the dashboard's **Overview** (Latest runs
+and **Time profile**) and in the terminal after `./finish.sh`.
+
+If the model runs on another machine you reach over SSH, set it up once:
+
+```bash
+cp server.example.yaml server.yaml      # then set ssh.target, server.kind and server.url
+ssh -o BatchMode=yes user@gpu-server true   # must work without a password prompt
+```
+
+`./setup.sh` then logs in during the session (read-only commands) and records: GPU
+utilisation / memory / power every few seconds, the loaded model and its GPU share, the number
+of LLM requests and how long each took (from the Ollama log, or your `log_command`), token
+counters (vLLM / llama.cpp), and any `extra_commands` (e.g. your serving tool's status).
+Without `server.yaml` only what the model's HTTP endpoint shows is recorded.
+
+| Statistic | Source |
+|---|---|
+| Agent working time | first to last LLM request (server log) - else GPU activity - else file changes |
+| Setup to finish | `./setup.sh` to `./finish.sh` |
+| Time per task | when each task's files changed (estimate) |
+| LLM requests, latency p50/p90, model busy time | server log (Ollama; vLLM via `log_command`) or vLLM/llama.cpp "requests running" |
+| Tokens in/out, generation tok/s | vLLM / llama.cpp counters; vLLM log throughput |
+| GPU utilisation, memory, power | `nvidia-smi` on the server, sampled every `interval_s` |
+
 ## What the container gives you
 
 * **Everything installed**: Python 3.12, pytest, ruff, numpy, duckdb, PyTorch (CPU), g++, cmake,
@@ -49,6 +77,7 @@ For the next model, run `./setup.sh` again.
 | Agent stops before finishing | Send: `Continue with the next unfinished task in starting_point.md.` |
 | `finish.sh` asks which model ran | Type the name you picked in Copilot, or pass `--model-label NAME`. |
 | `setup.sh`: "has not been collected yet" | Run `./finish.sh` first (or delete that session folder to discard it). |
+| "server statistics: cannot reach ..." | Check `ssh -o BatchMode=yes <target> true` works; the tasks still run and are scored without statistics. |
 | `docker: permission denied` | Add yourself to the `docker` group (`sudo usermod -aG docker $USER`, then log in again). |
 
 ## Without Docker

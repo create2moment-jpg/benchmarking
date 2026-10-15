@@ -479,7 +479,11 @@ def _collect(
         source,
         f"byok-session:{session_id}",
         overlays=overlays,
-        run_config={"byok_session": session_id, "only_attempted": only_attempted},
+        run_config={
+            "byok_session": session_id,
+            "only_attempted": only_attempted,
+            "profile": manifest.get("profile"),
+        },
     )
     result.run_id = imported.run_id
     result.warnings.extend(imported.warnings)

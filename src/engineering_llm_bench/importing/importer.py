@@ -214,7 +214,7 @@ class RunImporter:
                 "created_at": utcnow(),
                 "status": RunStatus.RUNNING.value,
                 "source": "imported",
-                "profile": None,
+                "profile": (run_config or {}).get("profile"),
                 "suite_name": self.bench.suite_name,
                 "suite_version": self.bench.suite_version,
                 "model_alias": meta.model_label,

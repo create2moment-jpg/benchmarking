@@ -153,3 +153,91 @@ def test_docker_requirements_match_pyproject() -> None:
     tasks = reqs(REPO / "docker/requirements-tasks.txt")
     names = {r.split(">")[0].split("=")[0].lower() for r in tasks}
     assert {"pytest", "ruff", "numpy", "duckdb"} <= names
+
+
+def test_server_profile_start_to_finish(  # noqa: PLR0915
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    from engineering_llm_bench.dashboard.server import DashboardApi  # noqa: PLC0415
+    from engineering_llm_bench.redaction import Redactor  # noqa: PLC0415
+    from engineering_llm_bench.storage.artifacts import ArtifactStore  # noqa: PLC0415
+    from engineering_llm_bench.storage.db import Store  # noqa: PLC0415
+    from tests.unit.test_remote_profiling import FAKE_SMI  # noqa: PLC0415
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    smi = bindir / "nvidia-smi"
+    smi.write_text(FAKE_SMI)
+    smi.chmod(smi.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    cfg = tmp_path / "bench.yaml"
+    data = (REPO / "configs/benchmark.example.yaml").read_text()
+    data = data.replace("tasks_dir: tasks", f"tasks_dir: {REPO / 'tasks'}")
+    data = data.replace("artifacts_dir: artifacts", f"artifacts_dir: {tmp_path / 'art'}")
+    data = data.replace("database: artifacts/bench.db", f"database: {tmp_path / 'art/bench.db'}")
+    data = data.replace("outputs_dir: artifacts/model_outputs", f"outputs_dir: {tmp_path / 'mo'}")
+    cfg.write_text(data)
+    monkeypatch.setenv("BENCH_CONFIG", str(cfg))
+    monkeypatch.setenv("BENCH_MODELS", str(REPO / "configs/models.example.yaml"))
+    monkeypatch.setattr(auto, "copy_to_clipboard", lambda text: True)
+    monkeypatch.setattr(auto, "find_endpoint", lambda: None)
+    cli = CliRunner()
+    session = tmp_path / "sessions" / "s1"
+    log = tmp_path / "ollama.log"
+    with serve(FakeOllama) as url:
+        server_yaml = tmp_path / "server.yaml"
+        server_yaml.write_text(
+            f"server:\n  kind: ollama\n  url: {url}\n  log_command: cat {log}\n"
+            "monitor:\n  interval_s: 1\n  extra_commands: ['echo strata-status-ok']\n"
+        )
+        res = cli.invoke(
+            app,
+            ["byok", "start", "--task", "python.fix-interval-merge", "--out", str(session),
+             "--no-open", "--server-config", str(server_yaml)],
+        )  # fmt: skip
+        assert res.exit_code == 0, res.output
+        assert "monitoring ollama at" in res.output
+        task = next((session / "tasks").iterdir())
+        shutil.copytree(
+            REPO / "tasks/python/fix_interval_merge/reference", task, dirs_exist_ok=True
+        )
+        (task / "RESULT.md").write_text("Status: done\n")
+        stamp = time.strftime("%Y/%m/%d - %H:%M:%S", time.localtime())
+        offset = time.strftime("%z")
+        log.write_text(
+            f'[GIN] {stamp} | 200 |  3.5s |  127.0.0.1 | POST     "/api/chat"\n'
+            f'[GIN] {stamp} | 200 |  1.5s |  127.0.0.1 | POST     "/api/chat"\n'
+        )
+        assert offset  # the snapshot records the server's UTC offset the same way
+        time.sleep(3.5)  # a few monitor samples
+        res = cli.invoke(app, ["byok", "finish", "--no-serve", "--calibration-runs", "0"])
+    assert res.exit_code == 0, res.output
+    assert "time profile:" in res.output and "LLM requests         2" in res.output
+    store = Store(tmp_path / "art/bench.db")
+    run = store.list_runs()[0]
+    profile = json.loads(run["perf_json"])["profile"]
+    assert profile["llm_requests"] == 2 and profile["model_time_s"] == 5.0
+    assert profile["gpu_util_peak_pct"] == 87.0 and profile["gpu_mem_total_mb"] == 24564
+    assert profile["samples"] >= 2 and profile["loaded_models"] == [MODEL]
+    assert profile["agent_duration_s"] is not None and profile["setup_to_finish_s"] > 3
+    assert profile["tasks"][0]["task_id"] == "python.fix-interval-merge"
+    # The monitor process has stopped.
+    manifest_remote = json.loads(next((tmp_path / "art/byok_sessions").glob("*.json")).read_text())[
+        "remote"
+    ]
+    assert "strata-status-ok" in manifest_remote["end"]["extra"]["CMD0"]
+    pid = manifest_remote["monitor_pid"]
+    time.sleep(0.5)
+    assert (
+        not Path(f"/proc/{pid}").exists()
+        or b"byok" not in Path(f"/proc/{pid}/cmdline").read_bytes()
+    )
+    # The dashboard payload carries the profile for the overview / time-profile section.
+    api = DashboardApi(store, ArtifactStore(tmp_path / "art", Redactor()), Redactor())
+    report_run = api.report()["runs"][0]
+    assert report_run["performance"]["profile"]["llm_requests"] == 2
+    store.close()

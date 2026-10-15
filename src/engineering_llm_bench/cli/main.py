@@ -1044,6 +1044,47 @@ def byok_prepare(
     typer.echo(f'     python byok/collect_results.py "{session.path}" --model-label "<your model>"')
 
 
+def _start_session_profiling(
+    ctx: Ctx, session_id: str, endpoint: Any, server_config: Path | None
+) -> None:
+    """Record the model endpoint (HTTP statistics) and start the server monitor."""
+    if endpoint is not None:
+        typer.echo(f"model server: {endpoint.base_url} ({endpoint.source})")
+        _record_session_endpoint(ctx, session_id, endpoint.base_url, None, None, False, True)
+    else:
+        typer.secho("model endpoint not found in VS Code settings: no HTTP statistics",
+                    fg=typer.colors.YELLOW)  # fmt: skip
+        from engineering_llm_bench.byok.session import update_trusted_manifest  # noqa: PLC0415
+
+        update_trusted_manifest(
+            ctx.artifacts_dir, session_id, "perf", {"started_at_epoch": time.time()}
+        )
+    from engineering_llm_bench.byok.profiling import access_for, start_profiling  # noqa: PLC0415
+    from engineering_llm_bench.perf.remote import (  # noqa: PLC0415
+        SERVER_CONFIG_FILE,
+        load_server_access,
+    )
+
+    config_path = server_config or _base_dir() / SERVER_CONFIG_FILE
+    if not config_path.is_file():
+        typer.echo(
+            f"tip: for GPU/server statistics over SSH, copy server.example.yaml to {config_path}"
+        )
+    try:
+        access = access_for(
+            load_server_access(config_path),
+            endpoint.base_url if endpoint else None,
+        )
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    monitoring = start_profiling(ctx.artifacts_dir, session_id, access)
+    if monitoring.get("error"):
+        typer.secho(f"server statistics: cannot reach {monitoring['where']}: {monitoring['error']}",
+                    fg=typer.colors.YELLOW)  # fmt: skip
+    elif monitoring:
+        typer.echo(f"server statistics: monitoring {monitoring['where']} during the session")
+
+
 @byok_app.command("start")
 def byok_start(
     profile: ProfileOpt = Profile.STANDARD,
@@ -1075,6 +1116,13 @@ def byok_start(
     container_network: Annotated[
         str, typer.Option(help="Docker network for the container ('host' reaches a local model).")
     ] = "host",
+    server_config: Annotated[
+        Path | None,
+        typer.Option(
+            help="Model server access for statistics (SSH etc.); default: server.yaml in the "
+            "repository if it exists. See server.example.yaml."
+        ),
+    ] = None,
     config: ConfigOpt = None,
     models: ModelsOpt = None,
 ) -> None:
@@ -1115,19 +1163,7 @@ def byok_start(
     except ConfigError as exc:
         raise _fail(str(exc)) from None
     endpoint = find_endpoint()
-    if endpoint is not None:
-        typer.echo(f"model server: {endpoint.base_url} ({endpoint.source})")
-        _record_session_endpoint(
-            ctx, session.session_id, endpoint.base_url, None, None, False, True
-        )
-    else:
-        typer.secho("model server not found: task scores only, no server statistics",
-                    fg=typer.colors.YELLOW)  # fmt: skip
-        from engineering_llm_bench.byok.session import update_trusted_manifest  # noqa: PLC0415
-
-        update_trusted_manifest(
-            ctx.artifacts_dir, session.session_id, "perf", {"started_at_epoch": time.time()}
-        )
+    _start_session_profiling(ctx, session.session_id, endpoint, server_config)
     write_current_session(
         ctx.artifacts_dir,
         {
@@ -1168,6 +1204,64 @@ def byok_start(
     typer.echo("  3. When it replies ALL TASKS COMPLETE, run:  ./finish.sh")
 
 
+@byok_app.command("monitor", hidden=True)
+def byok_monitor(
+    session_id: Annotated[str, typer.Argument()],
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Background sampler started by `byok start` (stopped by `byok finish`)."""
+    from engineering_llm_bench.byok.profiling import monitor_file  # noqa: PLC0415
+    from engineering_llm_bench.byok.session import read_trusted_manifest  # noqa: PLC0415
+    from engineering_llm_bench.perf.remote import ServerAccess, run_monitor  # noqa: PLC0415
+
+    ctx = load_ctx(config, models, need_tasks=False)
+    remote = (read_trusted_manifest(ctx.artifacts_dir, session_id) or {}).get("remote") or {}
+    if not remote.get("access"):
+        raise _fail(f"no monitoring configured for session {session_id}")
+    run_monitor(
+        ServerAccess.model_validate(remote["access"]), monitor_file(ctx.artifacts_dir, session_id)
+    )
+
+
+@byok_app.command("stop-monitor")
+def byok_stop_monitor(
+    session_id: Annotated[
+        str | None, typer.Argument(help="Default: the session `byok start` made.")
+    ] = None,
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Stop the session's server monitor and record the end snapshot and server log (run on
+    the machine that can reach the server; `byok finish` does this itself)."""
+    from engineering_llm_bench.byok.autodetect import read_current_session  # noqa: PLC0415
+    from engineering_llm_bench.byok.profiling import stop_profiling  # noqa: PLC0415
+
+    ctx = load_ctx(config, models, need_tasks=False)
+    sid = session_id or (read_current_session(ctx.artifacts_dir) or {}).get("session_id")
+    if not sid:
+        raise _fail("no current session")
+    try:
+        remote = stop_profiling(ctx.artifacts_dir, sid)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    if remote and remote.get("access"):
+        log = remote.get("log") or {}
+        typer.echo(
+            "server statistics recorded"
+            + (f" ({log['count']} LLM requests in the server log)" if log.get("count") else "")
+        )
+
+
+def _models_seen_by_monitor(artifacts_dir: Path, session_id: str) -> list[str]:
+    """Models the server had loaded during the session (from the monitor's samples)."""
+    from engineering_llm_bench.byok.profiling import monitor_file  # noqa: PLC0415
+    from engineering_llm_bench.perf.remote import read_samples  # noqa: PLC0415
+
+    samples = read_samples(monitor_file(artifacts_dir, session_id))
+    return sorted({m["name"] for s in samples for m in s.get("loaded") or [] if m.get("name")})
+
+
 @byok_app.command("finish")
 def byok_finish(
     model_label: Annotated[
@@ -1200,9 +1294,14 @@ def byok_finish(
         raise _fail("no session to collect: run setup.sh first (or pass --session-dir)")
     base = current.get("endpoint") if session_dir is None else None
     endpoint = FoundEndpoint(base, "recorded at start", []) if base else None
+    if current.get("session_id") and session_dir is None:
+        byok_stop_monitor(current["session_id"], config=config, models=models)
     label = model_label
     if label is None:
         guess, choices = guess_model(endpoint)
+        if guess is None and current.get("session_id"):
+            seen = _models_seen_by_monitor(ctx.artifacts_dir, current["session_id"])
+            guess, choices = (seen[0] if len(seen) == 1 else None), seen or choices
         if guess:
             typer.echo(f"model: {guess} (detected from the model server)")
             label = guess
@@ -1459,7 +1558,20 @@ def _collect_session_perf(
             allow_remote or bool(recorded.get("allow_remote")),
         )
     perf = assemble(base or "", recorded.get("start"), end, timing)
+    from engineering_llm_bench.byok.profiling import (  # noqa: PLC0415
+        describe_profile,
+        session_profile,
+        stop_profiling,
+    )
+
+    stop_profiling(ctx.artifacts_dir, result.session_id)  # no-op when already stopped
+    perf["profile"] = session_profile(
+        ctx.artifacts_dir, result.session_id, timing, result.submissions
+    )
     store.update_run(result.run_id, perf_json=dumps(perf))
+    typer.echo("time profile:")
+    for line in describe_profile(perf["profile"]):
+        typer.echo(f"  {line}")
     _print_perf(headline(perf), end)
     if base is None:
         typer.echo(

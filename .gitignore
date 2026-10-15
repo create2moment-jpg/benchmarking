@@ -26,3 +26,6 @@ tasks/**/build/
 
 # BYOK session folders, if created inside the repo with --allow-inside-repo
 byok_sessions/
+
+# Model-server access for statistics (copy of server.example.yaml)
+server.yaml
