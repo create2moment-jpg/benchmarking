@@ -148,15 +148,22 @@ def copy_to_clipboard(text: str) -> bool:
     return False
 
 
-def open_in_vscode(folder: Path) -> bool:
-    """Open ``folder`` in a new VS Code window (``code -n``)."""
+def devcontainer_uri(folder: Path, workspace: str = "/workspace") -> str:
+    """URI that makes VS Code open ``folder`` directly inside its Dev Container."""
+    return f"vscode-remote://dev-container+{str(folder).encode().hex()}{workspace}"
+
+
+def open_in_vscode(folder: Path, in_container: bool = False) -> bool:
+    """Open ``folder`` in a new VS Code window (``code -n``), inside its Dev Container if asked
+    (needs the Dev Containers extension; otherwise VS Code offers "Reopen in Container")."""
+    target = ["--folder-uri", devcontainer_uri(folder)] if in_container else [str(folder)]
     for exe in ("code", "code-insiders", "codium"):
         path = shutil.which(exe)
         if path is None:
             continue
         try:
             subprocess.Popen(  # noqa: S603
-                [path, "-n", str(folder)],
+                [path, "-n", *target],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,

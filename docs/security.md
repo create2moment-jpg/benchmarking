@@ -98,7 +98,10 @@ untrusted strings rendered with `textContent`, artifacts served only by register
 * External CLI harnesses (`kind: cli`) control their own tools; only timeout, environment
   scrubbing (plus explicitly passed-through variables), workspace cwd, filesystem hiding and
   (unless `remote`) network denial apply.
-* Copilot BYOK agents run in VS Code, outside this sandbox. They are kept apart from other
+* Copilot BYOK agents run in VS Code. With Docker, `./setup.sh` opens the session in a Dev
+  Container (only the session folder mounted, resource limits, host network so the model server
+  is reachable; every command auto-approved *inside* the container) and `./finish.sh` scores it
+  in a clean container from the same image. Without Docker they run outside this sandbox. They are kept apart from other
   models only by session folders outside the repository, archive-and-remove at collection, and
   the `chmod 000` lock. Prepare and collect one model's session before starting the next
   (`bench byok prepare` warns about uncollected sibling sessions), or use a separate OS user

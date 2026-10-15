@@ -16,37 +16,21 @@ task text whichever model you benchmark.
 
 ## Quick way: `./setup.sh`, then `./finish.sh`
 
-```bash
-./setup.sh             # or: ./setup.sh smoke   (4 quick tasks)
-```
+See [instructions/README.md](../instructions/README.md). In short:
 
-* First run only: creates `.venv` in the repo (benchmark + evaluators) and
-  `~/elb-byok-sessions/.runtime-venv` (pytest, ruff, numpy, duckdb, CPU PyTorch for the agent's
-  terminal; `WITH_TORCH=0` skips PyTorch). Needs Python >= 3.11 (3.12 recommended); warns if
-  `g++`/`cmake` are missing.
-* Creates a new, uniquely named session folder; finds the model server from your VS Code
-  settings (or a local Ollama); copies the one-line prompt to the clipboard; opens the session
-  in a new VS Code window.
-* The session's `.vscode/settings.json` auto-approves the commands the tasks need (`python`,
-  `pytest`, `ruff`, `g++`, `cmake`, `ctest`, `make`, `./<test binary>`, read-only helpers) and
-  edits to task files. `rm`, `mv`, `find`, `git`, `pip`, `curl`, `wget`, `sudo` and similar
-  still ask, and `starting_point.md`, `TASK.md`, `.bench/`, `.vscode/` are never auto-edited.
-  VS Code applies these only after you **trust the folder** (answer Yes when it asks).
-
-In that window: **Copilot Chat → Agent → pick your BYOK model → paste → Enter.** When it
-replies `ALL TASKS COMPLETE`:
-
-```bash
-./finish.sh            # or: ./finish.sh --model-label "qwen3.8-next"
-```
-
-It detects the model that ran (the one loaded on the server; asks you if it cannot tell),
-scores the session, moves the code into the model's private folder, measures the server and
-opens the dashboard. For the next model, run `./setup.sh` again.
-
-**Auto-approval note:** an approved `python` can run any Python code, so auto-approval means
-the agent runs code as your user without asking. Do it only for models you are willing to let
-do that, or use `bench byok start` without `--auto-approve` and click Allow yourself.
+* `./setup.sh [smoke|standard|extended]` builds two Docker images from [docker/](../docker)
+  once (`elb-tasks`: the agent's environment; `elb-eval`: the same plus the benchmark, for
+  scoring), creates a uniquely named session folder with a `.devcontainer/` and opens it in VS
+  Code inside that container. The model server is found from your VS Code settings (or a local
+  Ollama) for statistics; the one-line prompt is copied to the clipboard.
+* Inside the container: all task tools installed, the agent may install more, every command is
+  auto-approved, only the session folder is mounted (at `/workspace`), host network (so a
+  model on `localhost` is reachable), 8 GB / 4 CPUs.
+* `./finish.sh [--model-label NAME]` detects the model, scores the session in a clean
+  `elb-eval` container, archives the code into the model's private folder and opens the
+  dashboard.
+* No Docker (or `ELB_MODE=host`): host venvs instead, with a restricted auto-approve list.
+  `WITH_TORCH=0` skips PyTorch everywhere.
 
 The sections below are the same workflow in individual steps, with all options.
 

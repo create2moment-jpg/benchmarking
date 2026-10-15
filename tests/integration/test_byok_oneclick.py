@@ -102,3 +102,54 @@ def test_no_auto_approve_by_default(tmp_path: Path) -> None:
 
     assert vscode_settings(None, False) == {}
     assert "chat.tools.terminal.autoApprove" not in vscode_settings(tmp_path, False)
+
+
+def test_container_session(tmp_path: Path) -> None:
+    from engineering_llm_bench.byok.session import ContainerSpec, prepare_session  # noqa: PLC0415
+    from engineering_llm_bench.catalog.registry import TaskRegistry  # noqa: PLC0415
+    from engineering_llm_bench.config.loader import load_benchmark  # noqa: PLC0415
+    from engineering_llm_bench.domain import Profile  # noqa: PLC0415
+
+    bench = load_benchmark(REPO / "configs/benchmark.example.yaml")
+    session = tmp_path / "s"
+    prepare_session(
+        TaskRegistry.discover(REPO / "tasks"),
+        bench,
+        tmp_path / "art",
+        session,
+        Profile.SMOKE,
+        ["python.fix-interval-merge"],
+        python_env=tmp_path / "venv",  # ignored in container mode
+        container=ContainerSpec("elb-tasks:abc"),
+    )
+    dc = json.loads((session / ".devcontainer/devcontainer.json").read_text())
+    assert dc["image"] == "elb-tasks:abc" and dc["workspaceFolder"] == "/workspace"
+    assert "--network=host" in dc["runArgs"] and dc["remoteUser"] == "dev"
+    settings = dc["customizations"]["vscode"]["settings"]
+    assert settings["chat.tools.terminal.autoApprove"] == {"/.*/": True}
+    assert settings["chat.tools.edits.autoApprove"]["**/TASK.md"] is False
+    # Nothing is auto-approved if the folder is opened on the host instead of the container.
+    assert not (session / ".vscode/settings.json").exists()
+    start = (session / "starting_point.md").read_text()
+    assert "disposable container" in start and "Do not install packages" not in start
+    assert "disposable container" in (session / "AGENTS.md").read_text()
+    assert str(tmp_path / "venv") not in start
+
+
+def test_devcontainer_uri() -> None:
+    uri = auto.devcontainer_uri(Path("/home/u/s"))
+    assert uri == "vscode-remote://dev-container+" + b"/home/u/s".hex() + "/workspace"
+
+
+def test_docker_requirements_match_pyproject() -> None:
+    import tomllib  # noqa: PLC0415
+
+    def reqs(path: Path) -> list[str]:
+        lines = path.read_text().splitlines()
+        return sorted(x.strip() for x in lines if x.strip() and not x.startswith("#"))
+
+    project = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]
+    assert reqs(REPO / "docker/requirements-bench.txt") == sorted(project["dependencies"])
+    tasks = reqs(REPO / "docker/requirements-tasks.txt")
+    names = {r.split(">")[0].split("=")[0].lower() for r in tasks}
+    assert {"pytest", "ruff", "numpy", "duckdb"} <= names

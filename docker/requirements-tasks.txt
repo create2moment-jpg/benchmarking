@@ -1,0 +1,5 @@
+# Runtimes the tasks need (agent environment and evaluators). Keep in sync with pyproject extras.
+pytest>=8.0
+ruff>=0.6
+numpy>=1.26
+duckdb>=1.0

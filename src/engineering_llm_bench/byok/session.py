@@ -20,6 +20,7 @@ into the session.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -164,10 +165,15 @@ def prepare_session(
     allow_inside_repo: bool = False,
     python_env: Path | None = None,
     auto_approve: bool = False,
+    container: ContainerSpec | None = None,
 ) -> PreparedSession:
     """Create a session folder for an IDE agent. Refuses to overwrite existing content and, by
     default, refuses locations inside the benchmark repository (the agent could otherwise read
-    hidden tests and reference solutions)."""
+    hidden tests and reference solutions).
+
+    With ``container``, the folder also gets a Dev Container definition: VS Code runs the agent's
+    tools inside that image (all task runtimes installed, only this folder mounted), the agent may
+    install packages there, and every command is auto-approved inside the container only."""
     repo_root = registry.root.resolve().parent
     if not allow_inside_repo and _is_inside(out_dir, repo_root):
         raise ConfigError(
@@ -207,11 +213,16 @@ def prepare_session(
             tasks=contexts,
             session_id=session_id,
             total_min=sum(c["estimated_min"] for c in contexts),
-            environment_note=python_env_note(python_env) if python_env else "",
+            environment_note=python_env_note(python_env) if python_env and not container else "",
+            container=container is not None,
         ),
         encoding="utf-8",
     )
-    write_agent_instructions(out_dir, python_env, auto_approve)
+    if container is not None:
+        write_agent_instructions(out_dir, None, False, install_allowed=True)
+        write_devcontainer(out_dir, container)
+    else:
+        write_agent_instructions(out_dir, python_env, auto_approve)
     manifest = {
         "format": SESSION_FORMAT,
         "schema_version": 1,
@@ -531,10 +542,16 @@ in the workspace root; every task folder under `tasks/` has a `TASK.md` with its
 - Stay inside this workspace. Do not look for other folders, hidden tests or reference
   solutions on this machine; they are not available to you.
 - Edit only the files each `TASK.md` lists as editable. Never modify `starting_point.md`, any
-  `TASK.md`, `AGENTS.md`, `.bench/` or `.github/`.
-- Do not install packages and do not use the internet.
+  `TASK.md`, `AGENTS.md`, `.bench/`, `.devcontainer/` or `.github/`.
+- {install_rule}
 - Write a `RESULT.md` in every task folder (template in `starting_point.md`).
 """
+_NO_INSTALL = "Do not install packages and do not use the internet."
+_INSTALL_OK = (
+    "You work in a disposable container with every tool the tasks need. You may install extra\n"
+    "  packages there for investigation, but solutions must not depend on them (evaluation runs\n"
+    "  in a clean copy of the environment)."
+)
 
 
 def python_env_note(python_env: Path) -> str:
@@ -561,6 +578,18 @@ NEVER_APPROVED_COMMANDS = (
 )  # fmt: skip
 
 
+_PROTECTED_EDITS: dict[str, bool] = {
+    "**/*": True,
+    "**/TASK.md": False,
+    "**/starting_point.md": False,
+    "**/AGENTS.md": False,
+    "**/.bench/**": False,
+    "**/.vscode/**": False,
+    "**/.devcontainer/**": False,
+    "**/.github/**": False,
+}
+
+
 def vscode_settings(python_env: Path | None, auto_approve: bool) -> dict[str, Any]:
     """Workspace settings for the session folder. With ``auto_approve`` the agent can run the
     tasks' commands and edit task files without a confirmation click; package managers, network
@@ -577,27 +606,74 @@ def vscode_settings(python_env: Path | None, auto_approve: bool) -> dict[str, An
         commands["/^\\.\\/[\\w./-]+$/"] = True  # test binaries the agent built: ./build/test_x
         commands.update({c: False for c in NEVER_APPROVED_COMMANDS})
         settings["chat.tools.terminal.autoApprove"] = commands
-        settings["chat.tools.edits.autoApprove"] = {
-            "**/*": True,
-            "**/TASK.md": False,
-            "**/starting_point.md": False,
-            "**/AGENTS.md": False,
-            "**/.bench/**": False,
-            "**/.vscode/**": False,
-            "**/.github/**": False,
-        }
+        settings["chat.tools.edits.autoApprove"] = _PROTECTED_EDITS
         settings["chat.agent.maxRequests"] = 500
     return settings
 
 
+@dataclass
+class ContainerSpec:
+    """Dev Container for the agent: image with the task runtimes, Docker network mode (``host``
+    lets Copilot reach a model server on the host's localhost) and resource limits."""
+
+    image: str
+    network: str = "host"
+    memory: str = "8g"
+    cpus: int = field(default_factory=lambda: min(4, os.cpu_count() or 1))
+
+
+def devcontainer_config(spec: ContainerSpec) -> dict[str, Any]:
+    """Only the session folder is mounted (at /workspace); nothing else from the host is visible.
+    Inside the container every terminal command and file edit is auto-approved - the container is
+    the safety boundary - except edits to the session's control files."""
+    return {
+        "name": "Engineering tasks",
+        "image": spec.image,
+        "workspaceFolder": "/workspace",
+        "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+        "remoteUser": "dev",
+        "updateRemoteUserUID": True,
+        "runArgs": [
+            f"--network={spec.network}",
+            f"--memory={spec.memory}",
+            f"--cpus={spec.cpus}",
+            "--pids-limit=4096",
+        ],
+        "customizations": {
+            "vscode": {
+                "extensions": ["ms-python.python"],
+                "settings": {
+                    "python.defaultInterpreterPath": "/opt/venv/bin/python",
+                    "chat.tools.terminal.autoApprove": {"/.*/": True},
+                    "chat.tools.edits.autoApprove": _PROTECTED_EDITS,
+                    "chat.agent.maxRequests": 500,
+                },
+            }
+        },
+    }
+
+
+def write_devcontainer(out_dir: Path, spec: ContainerSpec) -> None:
+    atomic_write_bytes(
+        out_dir / ".devcontainer" / "devcontainer.json",
+        json.dumps(devcontainer_config(spec), indent=2).encode(),
+    )
+
+
 def write_agent_instructions(
-    out_dir: Path, python_env: Path | None = None, auto_approve: bool = False
+    out_dir: Path,
+    python_env: Path | None = None,
+    auto_approve: bool = False,
+    *,
+    install_allowed: bool = False,
 ) -> None:
     """Always-on agent instructions in the session root (picked up automatically by IDE agents
     via AGENTS.md / .github/copilot-instructions.md). They do not mention the model. With
     ``python_env`` (a venv outside the repository holding the task runtimes), it is named there
     and selected as the workspace's Python interpreter so new terminals use it."""
-    text = _AGENT_INSTRUCTIONS + (python_env_note(python_env) if python_env else "")
+    text = _AGENT_INSTRUCTIONS.replace(
+        "{install_rule}", _INSTALL_OK if install_allowed else _NO_INSTALL
+    ) + (python_env_note(python_env) if python_env else "")
     for rel in ("AGENTS.md", ".github/copilot-instructions.md"):
         atomic_write_bytes(out_dir / rel, text.encode())
     settings = vscode_settings(python_env, auto_approve)

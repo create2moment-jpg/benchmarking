@@ -21,10 +21,10 @@ reasoning - with reproducible, independently verified, transparently scored runs
 ## Benchmarking a model through Copilot BYOK (the easy way)
 
 ```bash
-./setup.sh      # installs everything (first run), creates a new session folder, opens it in VS Code
+./setup.sh      # builds/installs everything (first run), creates a new session, opens it in VS Code
 ```
-In the VS Code window that opens: **Copilot Chat → Agent → pick your model → paste (Ctrl+V) →
-Enter.** The prompt is on the clipboard and the task commands are auto-approved.
+In the VS Code window that opens (inside a Docker Dev Container with every tool installed and
+commands auto-approved): **Copilot Chat → Agent → pick your model → paste (Ctrl+V) → Enter.**
 ```bash
 ./finish.sh     # when the agent says ALL TASKS COMPLETE: scores it and opens the dashboard
 ```

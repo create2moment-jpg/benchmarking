@@ -1063,6 +1063,18 @@ def byok_start(
             "edit task files without a confirmation click; rm, git, pip, curl etc. still ask."
         ),
     ] = False,
+    container: Annotated[
+        str | None,
+        typer.Option(
+            help="Docker image (docker/Dockerfile, target `tasks`) to run the agent in as a "
+            "VS Code "
+            "Dev Container: only the session folder is mounted, every command is auto-approved "
+            "inside the container, and the agent may install packages there."
+        ),
+    ] = None,
+    container_network: Annotated[
+        str, typer.Option(help="Docker network for the container ('host' reaches a local model).")
+    ] = "host",
     config: ConfigOpt = None,
     models: ModelsOpt = None,
 ) -> None:
@@ -1077,7 +1089,10 @@ def byok_start(
         read_current_session,
         write_current_session,
     )
-    from engineering_llm_bench.byok.session import uncollected_sibling_sessions  # noqa: PLC0415
+    from engineering_llm_bench.byok.session import (  # noqa: PLC0415
+        ContainerSpec,
+        uncollected_sibling_sessions,
+    )
 
     ctx = load_ctx(config, models)
     pending = read_current_session(ctx.artifacts_dir)
@@ -1095,6 +1110,7 @@ def byok_start(
             ctx.registry, ctx.bench, ctx.artifacts_dir, target, profile, _csv(task),
             python_env=python_env.expanduser().resolve() if python_env else None,
             auto_approve=auto_approve,
+            container=ContainerSpec(container, container_network) if container else None,
         )  # fmt: skip
     except ConfigError as exc:
         raise _fail(str(exc)) from None
@@ -1119,16 +1135,20 @@ def byok_start(
             "session_id": session.session_id,
             "endpoint": endpoint.base_url if endpoint else None,
             "started_at_epoch": time.time(),
+            "container_image": container,
         },
     )
     prompt = agent_prompt()
     copied = copy_to_clipboard(prompt)
-    opened = open_vscode and open_in_vscode(session.path)
+    opened = open_vscode and open_in_vscode(session.path, in_container=container is not None)
     typer.secho(f"\nsession ready: {session.path} ({len(session.tasks)} tasks)",
                 fg=typer.colors.GREEN)  # fmt: skip
     typer.echo("")
     if not opened:
         typer.echo(f'  0. Open the folder in VS Code: code -n "{session.path}"')
+    if container:
+        typer.echo("     VS Code opens it inside the container (first time: it may take a minute).")
+        typer.echo('     If it opens on the host instead, click "Reopen in Container".')
     typer.echo(
         "  1. In the new VS Code window: Copilot Chat -> Agent mode -> pick your BYOK model."
     )
@@ -1138,7 +1158,9 @@ def byok_start(
         typer.echo("  2. Paste this prompt and press Enter:\n")
         typer.echo(textwrap.indent(textwrap.fill(prompt, 92), "     "))
         typer.echo("")
-    if auto_approve:
+    if container:
+        typer.echo("     Commands run inside the container and are auto-approved there.")
+    elif auto_approve:
         typer.echo("     If VS Code asks whether you trust the folder's authors, answer Yes")
         typer.echo("     (the auto-approval settings only apply in a trusted folder).")
     else:
