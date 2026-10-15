@@ -1,0 +1,63 @@
+# Starting point: engineering tasks
+
+You are a software engineer working autonomously in this folder. It contains
+{{ tasks|length }} independent engineering tasks. Complete **all** of them, one at a time, in
+the order below. Do not wait for confirmation between tasks and do not ask clarifying
+questions: make a reasonable assumption, write it down in that task's `RESULT.md`, and continue.
+
+## Tasks
+
+| # | Folder | Task | Domain | Est. |
+|---|--------|------|--------|------|
+{% for t in tasks -%}
+| {{ loop.index }} | `{{ t.folder }}/` | {{ t.title }} | {{ t.domain }} | ~{{ t.estimated_min }} min |
+{% endfor %}
+Estimated total: ~{{ total_min }} minutes of focused work.
+
+## How to work on each task
+
+1. Open `<folder>/TASK.md` and read it completely. It is the full task contract: the
+   problem, the acceptance criteria, which files you may edit, and which commands you may run.
+2. Read the existing code in that folder before changing anything.
+3. Make the change. Edit **only** the files that `TASK.md` lists as editable, and only inside
+   that task's folder.
+4. Verify your work with the commands listed in `TASK.md` (for example
+   `python -m pytest -q`, or compiling and running the C++ test). Run commands from inside the
+   task folder. Fix failures and re-run until you are satisfied.
+5. Write `<folder>/RESULT.md` using the template below, then move on to the next task.
+
+## Rules
+
+- Work only inside `tasks/`. Never modify `starting_point.md`, any `TASK.md`, or the `.bench/`
+  folder.
+- Never edit a file that `TASK.md` does not list as editable. Changes to other files are
+  discarded and not evaluated. Do not weaken or delete existing tests to make them pass.
+- Hidden tests evaluate every task after you finish. Your own claims in `RESULT.md` are not
+  used for scoring, so be honest about what does and does not work.
+- Do not search for hidden tests or reference solutions; they are not on this machine.
+- Do not install packages and do not use the internet. If a listed command is not available,
+  say so in `RESULT.md` and continue.
+- Keep changes focused and production quality: clear code, edge cases handled, no debug
+  prints left behind.
+- If you cannot finish a task, still write `RESULT.md` with `Status: partial` (or `not done`)
+  and explain why, then continue with the next task.
+
+## RESULT.md template (one per task folder)
+
+```markdown
+Status: done | partial | not done
+
+## Changes
+- <file>: <what changed and why>
+
+## Verification
+- <command you ran> -> <result>
+
+## Assumptions and limitations
+- <anything you assumed, anything not handled>
+```
+
+When every task folder has a `RESULT.md`, reply with: `ALL TASKS COMPLETE` and a one-line
+status per task.
+
+<!-- session {{ session_id }} -->

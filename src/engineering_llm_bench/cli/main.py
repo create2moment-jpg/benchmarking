@@ -11,6 +11,7 @@ import json
 import os
 import signal
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -41,16 +42,27 @@ app = typer.Typer(
 task_app = typer.Typer(help="Task catalogue tools.", no_args_is_help=True)
 review_app = typer.Typer(help="Human / judge review of rubric dimensions.", no_args_is_help=True)
 app.add_typer(task_app, name="task")
+byok_app = typer.Typer(
+    help="Copilot BYOK / IDE-agent sessions: starting_point.md + result collection.",
+    no_args_is_help=True,
+)
 app.add_typer(review_app, name="review")
+app.add_typer(byok_app, name="byok")
 
 EXIT_PROBLEMS, EXIT_CONFIG, EXIT_INTERRUPTED, EXIT_FAILED = 1, 2, 3, 4
+
+
+def _base_dir() -> Path:
+    """Directory that relative config paths resolve against (env BENCH_BASE_DIR, else cwd)."""
+    return Path(os.environ.get("BENCH_BASE_DIR") or Path.cwd())
 
 
 def _default_config(env: str, name: str) -> Path:
     if os.environ.get(env):
         return Path(os.environ[env])
-    local = Path("configs") / f"{name}.yaml"
-    return local if local.exists() else Path("configs") / f"{name}.example.yaml"
+    configs = _base_dir() / "configs"
+    local = configs / f"{name}.yaml"
+    return local if local.exists() else configs / f"{name}.example.yaml"
 
 
 ConfigOpt = Annotated[
@@ -99,7 +111,7 @@ def load_ctx(config: Path | None, models: Path | None, need_tasks: bool = True) 
     try:
         bench = load_benchmark(config or _default_config("BENCH_CONFIG", "benchmark"))
         models_file = load_models(models or _default_config("BENCH_MODELS", "models"))
-        tasks_dir, artifacts_dir, db_path = default_paths(bench, Path.cwd())
+        tasks_dir, artifacts_dir, db_path = default_paths(bench, _base_dir())
         registry = TaskRegistry.discover(tasks_dir) if need_tasks else TaskRegistry(tasks_dir)
     except ConfigError as exc:
         raise _fail(str(exc)) from None
@@ -852,6 +864,159 @@ def review_judge(
     for e in result.errors:
         typer.secho(e, fg=typer.colors.YELLOW)
     typer.echo(f"recorded {result.recorded} judge score(s) for {dimension}")
+
+
+# ---------------------------------------------------------------------------------- BYOK sessions
+
+
+def _default_session_dir() -> Path:
+    return Path.home() / "elb-byok-sessions" / time.strftime("session-%Y%m%d-%H%M%S")
+
+
+@byok_app.command("prepare")
+def byok_prepare(
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Session folder to create (default ~/elb-byok-sessions/session-<time>)."),
+    ] = None,
+    profile: ProfileOpt = Profile.STANDARD,
+    task: TaskOpt = None,
+    allow_inside_repo: Annotated[
+        bool, typer.Option(help="Testing only: allow a session folder inside this repository.")
+    ] = False,
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Create a session folder with starting_point.md and one folder per task for an IDE agent."""
+    from engineering_llm_bench.byok import prepare_session  # noqa: PLC0415
+
+    ctx = load_ctx(config, models)
+    target = (out or _default_session_dir()).expanduser()
+    try:
+        session = prepare_session(
+            ctx.registry,
+            ctx.bench,
+            ctx.artifacts_dir,
+            target,
+            profile,
+            _csv(task),
+            allow_inside_repo=allow_inside_repo,
+        )
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    typer.secho(
+        f"session {session.session_id}: {len(session.tasks)} task(s)", fg=typer.colors.GREEN
+    )
+    typer.echo(f"  folder:         {session.path}")
+    typer.echo(f"  starting point: {session.starting_point}")
+    typer.echo("Next steps:")
+    typer.echo("  1. Open ONLY the session folder in VS Code (File > Open Folder), not this repo.")
+    typer.echo("  2. In Copilot Chat choose Agent mode and your BYOK model, attach")
+    typer.echo("     starting_point.md and say: 'Follow starting_point.md and complete all tasks.'")
+    typer.echo("  3. When it is done, collect and score the results:")
+    typer.echo(f'     python byok/collect_results.py "{session.path}" --model-label "<your model>"')
+
+
+@byok_app.command("collect")
+def byok_collect(
+    session_dir: Annotated[Path, typer.Argument(help="Session folder created by `byok prepare`.")],
+    model_label: Annotated[
+        str, typer.Option(help="Label for the model in the dashboard, e.g. 'strata/qwen-3.8'.")
+    ],
+    harness_label: Annotated[str, typer.Option(help="Harness label.")] = "copilot-byok",
+    copilot_version: Annotated[
+        str | None, typer.Option(help="Copilot extension / VS Code version (recorded).")
+    ] = None,
+    provider_label: Annotated[
+        str | None, typer.Option(help="Optional serving label, e.g. 'ollama' (recorded only).")
+    ] = None,
+    remote: Annotated[
+        bool | None, typer.Option("--remote/--local", help="Was the model remote? (recorded)")
+    ] = None,
+    session_minutes: Annotated[
+        float | None, typer.Option(min=0, help="Total time the agent took, if you measured it.")
+    ] = None,
+    notes: Annotated[str | None, typer.Option(help="Free-text note stored with the run.")] = None,
+    only_attempted: Annotated[
+        bool,
+        typer.Option(help="Mark untouched tasks as skipped instead of evaluating them as failed."),
+    ] = False,
+    dry_run: Annotated[bool, typer.Option(help="Validate and show findings only.")] = False,
+    force: Annotated[bool, typer.Option(help="Allow collecting the same session again.")] = False,
+    report: Annotated[Path | None, typer.Option(help="Also write an HTML report here.")] = None,
+    serve: Annotated[bool, typer.Option(help="Start the dashboard after collecting.")] = False,
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Validate an agent's session output, run the hidden evaluators and update the dashboard."""
+    from engineering_llm_bench.byok import collect_session  # noqa: PLC0415
+
+    ctx = load_ctx(config, models)
+    store = None if dry_run else ctx.store()
+    artifacts = None if dry_run else ctx.artifacts()
+    try:
+        result = collect_session(
+            session_dir.expanduser(),
+            ctx.registry,
+            ctx.bench,
+            store,
+            artifacts,
+            ctx.artifacts_dir,
+            model_label=model_label,
+            harness_label=harness_label,
+            harness_version=copilot_version,
+            provider_label=provider_label,
+            remote=remote,
+            session_minutes=session_minutes,
+            notes=notes,
+            only_attempted=only_attempted,
+            dry_run=dry_run,
+            force=force,
+        )
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    typer.echo(f"session {result.session_id}: validation")
+    _table(
+        [
+            {
+                "task": s.task_id,
+                "attempted": "yes" if s.attempted else "no",
+                "files_changed": len(s.overlay),
+                "result_md": "yes" if s.result_md is not None else "MISSING",
+                "self_status": s.self_reported_status,
+                "rejected_edits": len(s.rejected),
+            }
+            for s in result.submissions
+        ],
+        ["task", "attempted", "files_changed", "result_md", "self_status", "rejected_edits"],
+    )
+    for s in result.submissions:
+        for n in s.notes:
+            typer.secho(f"  {s.task_id}: {n}", fg=typer.colors.YELLOW)
+    for w in result.warnings:
+        typer.secho(f"WARNING: {w}", fg=typer.colors.YELLOW)
+    if dry_run or result.run_id is None or store is None:
+        typer.echo("dry run: nothing was evaluated or stored")
+        return
+    typer.echo(f"\nscored run {result.run_id} ({model_label} via {harness_label}):")
+    attempts = store.attempts_for_run(result.run_id)
+    _table(attempts, ["task_id", "status", "passed", "score", "failure_class", "skip_reason"])
+    passed = sum(1 for a in attempts if a["passed"] == 1)
+    evaluated = sum(1 for a in attempts if a["passed"] is not None)
+    typer.secho(f"passed {passed}/{evaluated} evaluated task(s)", fg=typer.colors.GREEN)
+    if report is not None:
+        from engineering_llm_bench.reporting import ReportOptions, build_report, to_html  # noqa: PLC0415
+
+        data = build_report(store, ctx.artifacts(), ctx.redactor, ReportOptions())
+        atomic_write_bytes(report, to_html(data).encode("utf-8"))
+        typer.echo(f"wrote {report}")
+    if serve:
+        from engineering_llm_bench.dashboard.server import serve as serve_dashboard  # noqa: PLC0415
+
+        serve_dashboard(store, ctx.artifacts(), ctx.redactor, "127.0.0.1", port)
+    else:
+        typer.echo("dashboard: `bench dashboard` (or refresh it if already running)")
 
 
 def main() -> None:

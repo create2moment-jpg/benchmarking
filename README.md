@@ -18,6 +18,16 @@ reasoning - with reproducible, independently verified, transparently scored runs
 > Not a model-training or GPU-throughput benchmark. Wall time and provider-reported usage are
 > recorded as context only.
 
+## Benchmarking a model through Copilot BYOK
+
+If your model is driven by GitHub Copilot agent mode (BYOK), see **[byok/README.md](byok/README.md)**:
+
+```bash
+python byok/prepare_session.py --profile standard --out ~/elb-byok-sessions/qwen38-run1
+#   -> open that folder in VS Code, give starting_point.md to Copilot agent mode
+python byok/collect_results.py ~/elb-byok-sessions/qwen38-run1 --model-label "strata/qwen-3.8" --serve
+```
+
 ## Quick start
 
 ```bash
@@ -59,6 +69,7 @@ Tasks whose runtime is missing are reported as **skipped** with the reason - nev
 | `bench report [--run-id R] --format json\|csv\|html [--include-transcripts] [--include-source]` | redacted exports |
 | `bench dashboard [--host --port]` | local dashboard (loopback by default) |
 | `bench import-run --file F [--no-evaluate] [--keep-transcripts]` / `bench export-run` | manual/IDE runs (e.g. Copilot BYOK) |
+| `bench byok prepare` / `bench byok collect` | Copilot BYOK sessions: starting_point.md + collection (same as `byok/*.py`) |
 | `bench task validate PATH` | prove fixture fails, reference passes, broken fails |
 | `bench review export\|import\|judge` | blind human review, judge models (stored separately) |
 
@@ -120,7 +131,8 @@ CI: `.github/workflows/ci.yml` (lint, types, tests on 3.11/3.12, smoke run, HTML
 
 * The command sandbox is defence in depth, not a security boundary; run untrusted models in a
   container or VM (see docs/security.md).
-* GitHub Copilot BYOK cannot be driven programmatically; use the evidence-import workflow.
+* GitHub Copilot BYOK cannot be driven programmatically; use the `byok/` session workflow
+  (or the lower-level `bench import-run`).
 * External CLI harness support is generic (argv template); token usage from such tools is not
   parsed and is recorded as unknown.
 * The OpenAI-compatible and Anthropic adapters are tested against mocked transports and a local

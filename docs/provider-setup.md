@@ -104,6 +104,13 @@ Run with `bench run --harness claude-code-cli --model <label> --allow-external-h
 model). The benchmark bounds the CLI only by timeout, scrubbed environment, workspace cwd and
 (unless `remote`) network denial; usage is recorded as unknown.
 
+## Copilot BYOK sessions (recommended for IDE agents)
+
+`byok/prepare_session.py` writes a session folder with `starting_point.md` for the agent;
+`byok/collect_results.py` validates the agent's output, runs the hidden evaluators and stores
+the run for the dashboard. See [byok/README.md](../byok/README.md). The lower-level import format
+below remains available for other captured workflows.
+
 ## Manual import
 
 GitHub Copilot BYOK (and similar IDE agents) has **no public automation API** that this tool can

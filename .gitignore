@@ -23,3 +23,6 @@ reports/
 
 # Task build outputs
 tasks/**/build/
+
+# BYOK session folders, if created inside the repo with --allow-inside-repo
+byok_sessions/

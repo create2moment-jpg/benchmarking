@@ -1,0 +1,43 @@
+# {{ t.title }}
+
+Task `{{ t.id }}` (version {{ t.version }}) - domain: {{ t.domain }}, difficulty: {{ t.difficulty }}
+
+Work only inside this folder: `{{ t.folder }}/`. Run all commands from this folder.
+
+## Problem
+
+{{ t.prompt }}
+
+## Acceptance criteria
+
+{% for c in t.criteria -%}
+- {{ c }}
+{% endfor %}
+## Files you may edit
+
+{% for e in t.editable -%}
+- `{{ e }}`
+{% endfor %}
+Do not edit any other file (including this `TASK.md`). You may create new files only if they
+match the patterns above.
+{% if t.expected %}
+## Expected deliverables
+
+{% for e in t.expected -%}
+- `{{ e }}`
+{% endfor %}{% endif %}
+## Commands you may run
+
+{% if t.commands -%}
+{% for c in t.commands -%}
+- {{ c }}
+{% endfor -%}
+{% else -%}
+- None needed: this task only requires writing the deliverable file(s).
+{% endif %}
+{% if t.requires %}Required tools / Python modules: {{ t.requires|join(", ") }}.
+{% endif %}
+## When you are done
+
+Write `RESULT.md` in this folder (template in `starting_point.md`): status, changes,
+verification commands with results, assumptions and limitations.

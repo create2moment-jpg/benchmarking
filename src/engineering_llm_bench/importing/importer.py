@@ -114,6 +114,32 @@ def validate_patch(patch: str, task: Task, root: Path) -> list[str]:
     return paths
 
 
+def validate_overlay(overlay: dict[str, bytes | None], task: Task, root: Path) -> None:
+    """Refuse traversal and writes outside the task's editable paths."""
+    for rel in overlay:
+        try:
+            resolve_inside(root, rel)
+        except PathEscapeError as exc:
+            raise ConfigError(f"unsafe path in submission: {exc}") from exc
+        if not is_editable(rel, task.spec.editable_paths):
+            raise ConfigError(f"submission modifies non-editable path {rel!r} for task {task.id}")
+
+
+def apply_overlay(overlay: dict[str, bytes | None], workspace: Workspace) -> tuple[bool, str]:
+    """Write (or delete, for ``None``) the candidate's files into a fresh fixture copy."""
+    lines = []
+    for rel, data in sorted(overlay.items()):
+        target = resolve_inside(workspace.root, rel)
+        if data is None:
+            target.unlink(missing_ok=True)
+            lines.append(f"deleted {rel}")
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            lines.append(f"wrote {rel} ({len(data)} bytes)")
+    return True, "\n".join(lines) or "(no changes)"
+
+
 def apply_patch(patch: str, workspace: Workspace, runner: CommandRunner) -> tuple[bool, str]:
     """Apply with ``git apply`` (no shell; paths pre-validated). Returns (ok, log)."""
     try:
@@ -146,6 +172,28 @@ class RunImporter:
         self, path: Path, evaluate_patches: bool = True, keep_transcripts: bool = False
     ) -> ImportResult:
         doc = load_import_file(path)
+        return self.import_document(
+            doc,
+            path.parent,
+            path.name,
+            evaluate_patches=evaluate_patches,
+            keep_transcripts=keep_transcripts,
+        )
+
+    def import_document(
+        self,
+        doc: ImportFile,
+        base_dir: Path,
+        source_name: str,
+        *,
+        evaluate_patches: bool = True,
+        keep_transcripts: bool = False,
+        overlays: dict[str, dict[str, bytes | None]] | None = None,
+        run_config: dict[str, Any] | None = None,
+    ) -> ImportResult:
+        """Import a validated document. ``overlays`` (task id -> {path: content or None for
+        deletion}) applies the candidate's files directly instead of ``git apply``-ing the
+        patch; the patch is then kept as evidence only."""
         warnings: list[str] = []
         unknown = sorted({a.task_id for a in doc.attempts} - set(self.registry.tasks))
         if unknown:
@@ -172,7 +220,13 @@ class RunImporter:
                 "mode": ExecutionMode.MANUAL.value,
                 "model_config_json": None,
                 "harness_config_json": dumps(meta.model_dump(mode="json")),
-                "run_config_json": dumps({"import_file": path.name, "evaluated": evaluate_patches}),
+                "run_config_json": dumps(
+                    {
+                        "import_file": source_name,
+                        "evaluated": evaluate_patches,
+                        **(run_config or {}),
+                    }
+                ),
                 "config_fingerprint": fingerprint(
                     meta.model_dump(mode="json", exclude={"notes", "captured_at"})
                 ),
@@ -194,12 +248,13 @@ class RunImporter:
             patch = item.patch
             if item.patch_file is not None:
                 try:
-                    patch_path = resolve_inside(path.parent, item.patch_file)
+                    patch_path = resolve_inside(base_dir, item.patch_file)
                 except PathEscapeError as exc:
                     raise ConfigError(f"patch_file: {exc}") from exc
                 patch = patch_path.read_text(encoding="utf-8")
+            overlay = (overlays or {}).get(item.task_id)
             evaluated += self._import_attempt(
-                run_id, task, item, patch, runner, evaluate_patches, keep_transcripts
+                run_id, task, item, patch, runner, evaluate_patches, keep_transcripts, overlay
             )
         self.store.update_run(run_id, status=RunStatus.COMPLETED.value, finished_at=utcnow())
         return ImportResult(run_id, len(doc.attempts), evaluated, warnings)
@@ -213,6 +268,7 @@ class RunImporter:
         runner: CommandRunner,
         evaluate_patches: bool,
         keep_transcripts: bool,
+        overlay: dict[str, bytes | None] | None = None,
     ) -> int:
         aid = f"{run_id}--{re.sub(r'[^a-zA-Z0-9_.-]+', '-', task.id)}--r{item.repeat_index}"
         refs: list[ArtifactRef] = []
@@ -253,7 +309,7 @@ class RunImporter:
             "cost_usd": item.cost_usd,
             "summary": item.summary,
         }
-        if not evaluate_patches or not patch:
+        if not evaluate_patches or (not patch and overlay is None):
             reason = "imported without patch" if not patch else "imported without evaluation"
             row.update(
                 status=AttemptStatus.SKIPPED.value,
@@ -266,7 +322,10 @@ class RunImporter:
         workspace = prepare_workspace(task)
         try:
             try:
-                validate_patch(patch, task, workspace.root)
+                if overlay is not None:
+                    validate_overlay(overlay, task, workspace.root)
+                else:
+                    validate_patch(patch or "", task, workspace.root)
             except ConfigError as exc:
                 row.update(
                     status=AttemptStatus.COMPLETED.value,
@@ -278,7 +337,10 @@ class RunImporter:
                 )
                 self.store.save_evaluation(row, [], [], artifact_rows(refs))
                 return 0
-            ok, log = apply_patch(patch, workspace, runner)
+            if overlay is not None:
+                ok, log = apply_overlay(overlay, workspace)
+            else:
+                ok, log = apply_patch(patch or "", workspace, runner)
             refs.append(self.artifacts.write_text(run_id, aid, "apply.log", log))
             if not ok:
                 row.update(
