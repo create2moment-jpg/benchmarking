@@ -39,6 +39,31 @@ values + secret-shaped patterns). `.env` is gitignored; `.env.example` has place
   `isolation.network: deny` fails closed when namespaces are unavailable;
   `deny_if_possible` (default) degrades with `bench doctor` reporting `none`.
 
+**Filesystem isolation between models** (`isolation.filesystem`, default `hide_if_possible`).
+Every command run for a model - agent tools, evaluators and external CLI harnesses - also gets a
+private mount namespace (Python ≥ 3.12 on Linux; a user namespace is used when not root). In
+it, these paths are covered by empty read-only tmpfs mounts, so they list as empty (or do not
+exist) for that process only; the host view is unchanged:
+
+* `outputs_dir` (every model's code), `artifacts_dir` (results DB, diffs, traces);
+* `tasks_dir` (reference solutions, hidden tests) and the repository's `.git`;
+* `~/elb-byok-sessions` (Copilot BYOK session folders);
+* every other attempt's directory under the per-user workspaces root
+  (`$TMPDIR/elb-workspaces-<uid>`), i.e. concurrent attempts of other models.
+
+The command's own workspace and the interpreter are never hidden. `hide` refuses to run when
+mount namespaces are unavailable; `hide_if_possible` degrades and `bench doctor` reports
+`filesystem isolation: none`. `off` disables it.
+
+**Per-model output folders.** Each attempt's final code is kept in
+`outputs_dir/<model>/runs/<run>/<task>__r<N>/` (`code/`, `diff.patch`, `meta.json`). With
+`lock_outputs: true` the folder is `chmod 000` whenever the benchmark is not writing to it, so
+processes outside the sandbox (an IDE agent's own terminal) get "Permission denied". Root and your
+own user can unlock it (`bench outputs unlock`); the lock is a guard against accidental
+discovery, not access control. BYOK sessions are archived into the model's folder at collection
+and the agent-visible working copy (`tasks/`, `starting_point.md`) is deleted
+(`--keep-session` keeps it).
+
 **Workspaces.** Each attempt gets a new temp directory outside the repository; the model only
 writes inside it (`resolve_inside` rejects traversal and symlink escapes; `editable_paths`
 restricts which files may change). Hidden evaluator files are copied in only after the agent
@@ -71,7 +96,12 @@ untrusted strings rendered with `textContent`, artifacts served only by register
   For untrusted models run the benchmark inside a container/VM (e.g. `docker run --network none`
   with the repo mounted read-only and `artifacts/` mounted read-write) or under gVisor.
 * External CLI harnesses (`kind: cli`) control their own tools; only timeout, environment
-  scrubbing (plus explicitly passed-through variables), workspace cwd and (unless `remote`)
-  network denial apply. They are disabled unless `--allow-external-harness` is passed.
+  scrubbing (plus explicitly passed-through variables), workspace cwd, filesystem hiding and
+  (unless `remote`) network denial apply.
+* Copilot BYOK agents run in VS Code, outside this sandbox. They are kept apart from other
+  models only by session folders outside the repository, archive-and-remove at collection, and
+  the `chmod 000` lock. Prepare and collect one model's session before starting the next
+  (`bench byok prepare` warns about uncollected sibling sessions), or use a separate OS user
+  or container per model. They are disabled unless `--allow-external-harness` is passed.
 * Regex redaction cannot catch every secret format; prefer not to give models secrets at all.
 * Judge models receive diffs and summaries; using a remote judge sends that data (consent flag).

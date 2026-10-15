@@ -96,8 +96,21 @@ What the collector does:
 * Collecting the same session twice is refused (it would double-count); use `--force` if you
   really mean it.
 
+* **Moves the agent's code into the model's private folder**:
+  `artifacts/model_outputs/<model>/byok_sessions/<session_id>/` (raw session) and
+  `.../runs/<run_id>/<task>__r0/` (final code, diff, meta). It then deletes the session's
+  `tasks/` and `starting_point.md` (a `COLLECTED.md` note stays), so the next model's agent
+  cannot find this model's code. Pass `--keep-session` to keep the working copy. A forced
+  re-collection (`--force`) reads from the archive.
+* The output folder is locked (`chmod 000`) while the benchmark is not writing to it; browse
+  it with `bench outputs list`, `bench outputs export --model "strata/qwen-3.8" --to DIR`.
+
 Each new benchmark of a model (or of a different model) needs a **fresh session**: run
-`prepare_session.py` again with a new `--out` folder.
+`prepare_session.py` again with a new `--out` folder. **Collect one session before preparing the
+next one.** Copilot's agent runs in VS Code outside the benchmark's sandbox, so it is only kept
+away from other models' code because finished sessions are removed and the output folder is
+locked. `prepare` warns when a sibling session still holds an uncollected working copy. For
+stronger separation use a separate OS user (or container/VM) per model.
 
 ## Performance statistics (secondary to task outcomes)
 

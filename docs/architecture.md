@@ -97,7 +97,15 @@ silently attributed to the model.
 artifacts/                         (gitignored)
   bench.db
   runs/<run_id>/<attempt_id>/trace.jsonl | diff.patch | summary.md | checks/<check>.log
+           | code_location.txt
+  byok_sessions/<session_id>.json  (trusted BYOK manifests)
+  model_outputs/                   (outputs_dir; chmod 000 unless being written - outputs.py)
+    <model>/MODEL.json
+    <model>/runs/<run_id>/<task_id>__r<N>/code/ | diff.patch | meta.json
+    <model>/byok_sessions/<session_id>/   (archived BYOK session)
 ```
+All of `artifacts/`, `tasks/`, `.git`, BYOK session folders and other attempts' workspaces are
+hidden from model-run commands by a private mount namespace (`tools/runner.py`, `isolation.py`).
 
 ### Import format
 `importing/schema.py` - see `docs/provider-setup.md#manual-import`.
@@ -112,7 +120,8 @@ artifacts/                         (gitignored)
    created by the model is deleted first); checks run through the sandboxed runner.
 5. **Score**: `score_attempt` → per-dimension scores, aggregate over assessed dimensions,
    coverage, pass, regression flag.
-6. **Persist**: evidence files written atomically, then one DB transaction per attempt.
+6. **Persist**: the final code is saved to the model's output folder, evidence files are
+   written atomically, then one DB transaction per attempt.
    `PENDING`/`RUNNING` rows left by an interrupted process become `INTERRUPTED`.
 7. **Report**: exports and the dashboard read only the database and artifact files.
 

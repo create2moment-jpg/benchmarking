@@ -263,9 +263,16 @@ class LimitsConfig(StrictModel):
 
 
 class IsolationConfig(StrictModel):
-    """Isolation for commands. ``unshare`` uses Linux user+net namespaces (no network)."""
+    """Isolation for commands run on behalf of a model (agent tools, external agent CLIs and
+    evaluators). ``network``: Linux network namespace with loopback only. ``filesystem``: a
+    private mount view in which other models' output folders, stored results, task reference
+    solutions / hidden tests, the repository's git history, BYOK sessions and other attempts'
+    workspaces appear empty. ``*_if_possible`` degrades (reported by ``bench doctor``);
+    ``deny``/``hide`` refuse to run without it."""
 
     network: Literal["deny_if_possible", "deny", "allow"] = "deny_if_possible"
+    filesystem: Literal["hide_if_possible", "hide", "off"] = "hide_if_possible"
+    lock_outputs: bool = True
     keep_workspaces: bool = False
 
 
@@ -280,6 +287,8 @@ class BenchmarkConfig(StrictModel):
     suite_version: str = Field(min_length=1)
     tasks_dir: str = "tasks"
     artifacts_dir: str = "artifacts"
+    #: Per-model folders with every attempt's final code (see outputs.py).
+    outputs_dir: str = "artifacts/model_outputs"
     database: str = "artifacts/bench.db"
     allow_remote_providers: bool = False
     default_harness: str = "agent"

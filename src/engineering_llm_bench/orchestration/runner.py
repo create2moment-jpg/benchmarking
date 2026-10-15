@@ -40,7 +40,9 @@ from engineering_llm_bench.environment import (
 )
 from engineering_llm_bench.evaluation.evaluator import EvaluationOutcome, evaluate
 from engineering_llm_bench.harnesses import Harness, HarnessContext, HarnessResult, create_harness
+from engineering_llm_bench.isolation import hidden_paths_for, make_command_runner
 from engineering_llm_bench.orchestration.records import artifact_rows, evaluation_rows
+from engineering_llm_bench.outputs import ModelOutputs
 from engineering_llm_bench.providers import ManagedProvider, create_provider
 from engineering_llm_bench.redaction import Redactor
 from engineering_llm_bench.storage.artifacts import ArtifactRef, ArtifactStore
@@ -117,12 +119,17 @@ class BenchmarkRunner:
         store: Store,
         artifacts: ArtifactStore,
         progress: ProgressFn | None = None,
+        outputs: ModelOutputs | None = None,
     ) -> None:
         self.bench = bench
         self.models = models
         self.registry = registry
         self.store = store
         self.artifacts = artifacts
+        self.outputs = outputs or ModelOutputs(
+            artifacts.root / "model_outputs", bench.isolation.lock_outputs
+        )
+        self.hidden_paths = hidden_paths_for(registry.root, artifacts.root, self.outputs.root)
         self.progress = progress or (lambda _msg: None)
         self._eval_sem = threading.BoundedSemaphore(bench.concurrency.max_parallel_evaluations)
 
@@ -302,7 +309,7 @@ class BenchmarkRunner:
         resolved = self.resolve(req)
         cancel = cancel or CancelToken()
         run_id = self._start_run(resolved)
-        command_runner = CommandRunner(self.bench.limits, self.bench.isolation.network)
+        command_runner = make_command_runner(self.bench, self.hidden_paths)
         provider = create_provider(resolved.model) if resolved.model else None
         harness = create_harness(resolved.harness_cfg, provider)
         existing = {
@@ -587,6 +594,43 @@ class BenchmarkRunner:
             "eval_cpu_s": outcome.cpu_s if outcome else None,
             "eval_max_rss_mb": outcome.max_rss_mb if outcome else None,
         }
+        code_dir = self.outputs.save_attempt(
+            run.model_label,
+            run_id,
+            task.id,
+            rep,
+            workspace.current(),
+            workspace.diff(),
+            {
+                k: attempt_row.get(k)
+                for k in (
+                    "run_id",
+                    "task_id",
+                    "task_version",
+                    "repeat_index",
+                    "status",
+                    "failure_class",
+                    "passed",
+                    "score",
+                    "agent_wall_s",
+                    "summary",
+                )
+            }
+            | {
+                "model_alias": run.model_label,
+                "harness": run.harness_cfg.name,
+                "mode": run.mode.value,
+            },
+            {
+                "provider": run.model.provider if run.model else "external",
+                "model_id": run.model.model_id if run.model else None,
+            },
+        )
+        refs.append(
+            self.artifacts.write_text(
+                run_id, aid, "code_location.txt", f"{(self.outputs.root / code_dir).as_posix()}\n"
+            )
+        )
         self.store.save_evaluation(
             attempt_row,
             dims_rows,
@@ -621,6 +665,11 @@ def _classify(
     if outcome.scorecard.passed is False:
         return AttemptStatus.COMPLETED, FailureClass.TESTS_FAILED
     return AttemptStatus.COMPLETED, FailureClass.NONE
+
+
+def outputs_path(bench: BenchmarkConfig, base: Path) -> Path:
+    path = Path(bench.outputs_dir)
+    return path if path.is_absolute() else base / path
 
 
 def default_paths(bench: BenchmarkConfig, base: Path) -> tuple[Path, Path, Path]:

@@ -8,7 +8,9 @@ Usage (from the repository root):
     python byok/collect_results.py SESSION --model-label "strata/qwen-3.8" --serve     # + dashboard
 
 Options: --provider-label ollama, --local/--remote, --copilot-version X, --session-minutes N,
---only-attempted, --report reports/byok.html, --force. Equivalent to `bench byok collect ...`.
+--only-attempted, --report reports/byok.html, --force, --keep-session (the agent-visible
+working copy is otherwise moved into the model's private output folder).
+Equivalent to `bench byok collect ...`.
 """
 
 from __future__ import annotations

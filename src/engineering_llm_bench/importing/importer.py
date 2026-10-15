@@ -22,8 +22,10 @@ from engineering_llm_bench.environment import (
 )
 from engineering_llm_bench.evaluation.evaluator import evaluate
 from engineering_llm_bench.harnesses.base import HarnessResult
-from engineering_llm_bench.importing.schema import ImportedAttempt, ImportFile
+from engineering_llm_bench.importing.schema import ImportedAttempt, ImportedRunMeta, ImportFile
+from engineering_llm_bench.isolation import hidden_paths_for, make_command_runner
 from engineering_llm_bench.orchestration.records import artifact_rows, evaluation_rows
+from engineering_llm_bench.outputs import ModelOutputs
 from engineering_llm_bench.providers.base import Usage
 from engineering_llm_bench.storage.artifacts import ArtifactRef, ArtifactStore
 from engineering_llm_bench.storage.db import Store, dumps, utcnow
@@ -162,11 +164,16 @@ class RunImporter:
         registry: TaskRegistry,
         store: Store,
         artifacts: ArtifactStore,
+        outputs: ModelOutputs | None = None,
     ) -> None:
         self.bench = bench
         self.registry = registry
         self.store = store
         self.artifacts = artifacts
+        self.outputs = outputs or ModelOutputs(
+            artifacts.root / "model_outputs", bench.isolation.lock_outputs
+        )
+        self._meta: ImportedRunMeta | None = None
 
     def import_file(
         self, path: Path, evaluate_patches: bool = True, keep_transcripts: bool = False
@@ -236,7 +243,10 @@ class RunImporter:
                 "notes": meta.notes,
             }
         )
-        runner = CommandRunner(self.bench.limits, self.bench.isolation.network)
+        self._meta = meta
+        runner = make_command_runner(
+            self.bench, hidden_paths_for(self.registry.root, self.artifacts.root, self.outputs.root)
+        )
         evaluated = 0
         for item in doc.attempts:
             task = self.registry.get(item.task_id)
@@ -327,31 +337,14 @@ class RunImporter:
                 else:
                     validate_patch(patch or "", task, workspace.root)
             except ConfigError as exc:
-                row.update(
-                    status=AttemptStatus.COMPLETED.value,
-                    failure_class=FailureClass.MALFORMED_OUTPUT.value,
-                    error=str(exc),
-                    score=None,
-                    passed=0,
-                    notes_json=dumps(notes),
-                )
-                self.store.save_evaluation(row, [], [], artifact_rows(refs))
-                return 0
+                return self._reject(row, str(exc), notes, refs)
             if overlay is not None:
                 ok, log = apply_overlay(overlay, workspace)
             else:
                 ok, log = apply_patch(patch or "", workspace, runner)
             refs.append(self.artifacts.write_text(run_id, aid, "apply.log", log))
             if not ok:
-                row.update(
-                    status=AttemptStatus.COMPLETED.value,
-                    failure_class=FailureClass.MALFORMED_OUTPUT.value,
-                    error="patch does not apply to the task fixture",
-                    passed=0,
-                    notes_json=dumps(notes),
-                )
-                self.store.save_evaluation(row, [], [], artifact_rows(refs))
-                return 0
+                return self._reject(row, "patch does not apply to the task fixture", notes, refs)
             refs.append(self.artifacts.write_text(run_id, aid, "diff.patch", workspace.diff()))
             harness = HarnessResult(
                 finished=True,
@@ -392,10 +385,70 @@ class RunImporter:
                 .as_posix(),
                 notes_json=dumps(notes + card.notes),
             )
+            self._save_code(run_id, aid, task, item, row, workspace, refs)
             self.store.save_evaluation(row, dims, checks, artifact_rows(refs))
             return 1
         finally:
             workspace.cleanup()
+
+    def _reject(
+        self, row: dict[str, Any], error: str, notes: list[str], refs: list[ArtifactRef]
+    ) -> int:
+        """Record a submission that could not be applied (counts as a failed attempt)."""
+        row.update(
+            status=AttemptStatus.COMPLETED.value,
+            failure_class=FailureClass.MALFORMED_OUTPUT.value,
+            error=error,
+            passed=0,
+            notes_json=dumps(notes),
+        )
+        self.store.save_evaluation(row, [], [], artifact_rows(refs))
+        return 0
+
+    def _save_code(
+        self,
+        run_id: str,
+        aid: str,
+        task: Task,
+        item: ImportedAttempt,
+        row: dict[str, Any],
+        workspace: Workspace,
+        refs: list[ArtifactRef],
+    ) -> None:
+        """Store the evaluated code in the model's private output folder."""
+        if self._meta is None:
+            return
+        keys = (
+            "run_id",
+            "task_id",
+            "task_version",
+            "repeat_index",
+            "status",
+            "failure_class",
+            "passed",
+            "score",
+            "summary",
+        )
+        meta = {k: row.get(k) for k in keys} | {
+            "model_alias": self._meta.model_label,
+            "harness": self._meta.harness,
+            "mode": "manual",
+        }
+        code_dir = self.outputs.save_attempt(
+            self._meta.model_label,
+            run_id,
+            task.id,
+            item.repeat_index,
+            workspace.current(),
+            workspace.diff(),
+            meta,
+            {"provider": self._meta.provider_label, "model_id": self._meta.provider_model_id},
+        )
+        refs.append(
+            self.artifacts.write_text(
+                run_id, aid, "code_location.txt", f"{(self.outputs.root / code_dir).as_posix()}\n"
+            )
+        )
 
 
 def export_import_format(store: Store, artifacts: ArtifactStore, run_id: str) -> dict[str, Any]:

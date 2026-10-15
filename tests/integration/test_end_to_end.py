@@ -3,6 +3,7 @@ resume, determinism and cross-run isolation."""
 
 from __future__ import annotations
 
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -214,13 +215,21 @@ print("Copied the reference solution. Tested: no. Limitations: scripted external
 """
 
 
+def reference_copy(tmp_path: Path) -> Path:
+    dst = tmp_path / "task-copy"
+    if not dst.exists():
+        shutil.copytree(REPO / "tasks", dst)
+    return dst
+
+
 def test_external_cli_harness(bench_env: BenchEnv, tmp_path: Path) -> None:
     script = tmp_path / "fake_agent.py"
     script.write_text(FAKE_AGENT)
     harness = HarnessConfig(
         name="fake-cli",
         kind="cli",
-        argv=[sys.executable, str(script), str(REPO / "tasks")],
+        # The real catalogue is hidden from harness processes; give the scripted agent a copy.
+        argv=[sys.executable, str(script), str(reference_copy(tmp_path))],
         prompt_via="stdin",
     )
     bench_env.models = bench_env.models.model_copy(update={"harnesses": [harness]})

@@ -29,7 +29,9 @@ from engineering_llm_bench.orchestration.runner import (
     RunRequest,
     build_redactor,
     default_paths,
+    outputs_path,
 )
+from engineering_llm_bench.outputs import ModelOutputs
 from engineering_llm_bench.redaction import Redactor
 from engineering_llm_bench.storage.artifacts import ArtifactStore, atomic_write_bytes
 from engineering_llm_bench.storage.db import SchemaVersionError, Store, dumps
@@ -53,6 +55,11 @@ perf_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(perf_app, name="perf")
+outputs_app = typer.Typer(
+    help="Per-model output folders (each model's code, hidden from other models).",
+    no_args_is_help=True,
+)
+app.add_typer(outputs_app, name="outputs")
 
 EndpointOpt = Annotated[
     str | None,
@@ -121,12 +128,16 @@ class Ctx:
     artifacts_dir: Path
     db_path: Path
     redactor: Redactor
+    outputs_dir: Path
 
     def store(self) -> Store:
         return Store(self.db_path)
 
     def artifacts(self) -> ArtifactStore:
         return ArtifactStore(self.artifacts_dir, self.redactor)
+
+    def outputs(self) -> ModelOutputs:
+        return ModelOutputs(self.outputs_dir, self.bench.isolation.lock_outputs)
 
 
 def _fail(message: str, code: int = EXIT_CONFIG) -> typer.Exit:
@@ -150,6 +161,7 @@ def load_ctx(config: Path | None, models: Path | None, need_tasks: bool = True) 
         artifacts_dir,
         db_path,
         build_redactor(models_file, bench),
+        outputs_path(bench, _base_dir()),
     )
 
 
@@ -306,7 +318,10 @@ def doctor(
     """Check runtime, tools, storage and endpoint reachability. Sends no prompts or code."""
     from engineering_llm_bench.environment import collect_environment  # noqa: PLC0415
     from engineering_llm_bench.providers.openai_compat import probe_endpoint  # noqa: PLC0415
-    from engineering_llm_bench.tools.runner import isolation_method  # noqa: PLC0415
+    from engineering_llm_bench.tools.runner import (  # noqa: PLC0415
+        filesystem_isolation_method,
+        isolation_method,
+    )
 
     ctx = load_ctx(config, models)
     env = collect_environment()
@@ -315,6 +330,15 @@ def doctor(
     for name, ver in {**env["tools"], **env["python_modules"]}.items():
         typer.echo(f"  {name:<10} {ver or 'not found'}")
     typer.echo(f"network isolation: {isolation_method()} [policy: {ctx.bench.isolation.network}]")
+    typer.echo(
+        f"filesystem isolation: {filesystem_isolation_method()} "
+        f"[policy: {ctx.bench.isolation.filesystem}]"
+    )
+    outputs_store = ctx.outputs()
+    typer.echo(
+        f"model outputs: {outputs_store.root} "
+        f"({'locked' if outputs_store.locked else 'not locked or not created yet'})"
+    )
     try:
         store = ctx.store()
         typer.echo(
@@ -494,7 +518,13 @@ def run(
     ctx = load_ctx(config, models)
     store = ctx.store()
     runner = BenchmarkRunner(
-        ctx.bench, ctx.models, ctx.registry, store, ctx.artifacts(), progress=typer.echo
+        ctx.bench,
+        ctx.models,
+        ctx.registry,
+        store,
+        ctx.artifacts(),
+        progress=typer.echo,
+        outputs=ctx.outputs(),
     )
     req = _request(
         model,
@@ -776,7 +806,7 @@ def import_run(
     from engineering_llm_bench.importing import RunImporter  # noqa: PLC0415
 
     ctx = load_ctx(config, models)
-    importer = RunImporter(ctx.bench, ctx.registry, ctx.store(), ctx.artifacts())
+    importer = RunImporter(ctx.bench, ctx.registry, ctx.store(), ctx.artifacts(), ctx.outputs())
     try:
         result = importer.import_file(
             file, evaluate_patches=evaluate, keep_transcripts=keep_transcripts
@@ -983,6 +1013,14 @@ def byok_prepare(
     typer.secho(
         f"session {session.session_id}: {len(session.tasks)} task(s)", fg=typer.colors.GREEN
     )
+    from engineering_llm_bench.byok.session import uncollected_sibling_sessions  # noqa: PLC0415
+
+    for other in uncollected_sibling_sessions(session.path):
+        typer.secho(
+            f"WARNING: {other} still holds another (uncollected) agent's code next to this "
+            "session; collect it first so this model's agent cannot read it",
+            fg=typer.colors.YELLOW,
+        )
     typer.echo(f"  folder:         {session.path}")
     typer.echo(f"  starting point: {session.starting_point}")
     if endpoint or byok_config:
@@ -1029,6 +1067,13 @@ def byok_collect(
     report: Annotated[Path | None, typer.Option(help="Also write an HTML report here.")] = None,
     serve: Annotated[bool, typer.Option(help="Start the dashboard after collecting.")] = False,
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+    keep_session: Annotated[
+        bool,
+        typer.Option(
+            help="Keep the agent-visible working copy (default: move it into the "
+            "model's private output folder so later models cannot see it)."
+        ),
+    ] = False,
     endpoint: EndpointOpt = None,
     byok_config: ByokConfigOpt = None,
     model_id: ModelIdOpt = None,
@@ -1065,6 +1110,8 @@ def byok_collect(
             only_attempted=only_attempted,
             dry_run=dry_run,
             force=force,
+            outputs=ctx.outputs(),
+            keep_session=keep_session,
         )
     except ConfigError as exc:
         raise _fail(str(exc)) from None
@@ -1097,6 +1144,12 @@ def byok_collect(
     passed = sum(1 for a in attempts if a["passed"] == 1)
     evaluated = sum(1 for a in attempts if a["passed"] is not None)
     typer.secho(f"passed {passed}/{evaluated} evaluated task(s)", fg=typer.colors.GREEN)
+    if result.archived_to is not None:
+        typer.echo(f"code archived in the model's private folder: {result.archived_to}")
+    if result.session_removed:
+        typer.echo(
+            "agent working copy removed from the session folder (use --keep-session to keep)"
+        )
     _collect_session_perf(
         ctx, store, result, endpoint, byok_config, model_id, calibration_runs, allow_remote_probe
     )
@@ -1354,6 +1407,61 @@ def perf_probe(
             raise _fail(f"unknown run id {attach_run}")
         store.update_run(attach_run, perf_json=dumps(assemble(base, None, report)))
         typer.echo(f"attached to run {attach_run}")
+
+
+@outputs_app.command("list")
+def outputs_list(config: ConfigOpt = None, models: ModelsOpt = None) -> None:
+    """List models with stored code and where it is."""
+    ctx = load_ctx(config, models, need_tasks=False)
+    store = ctx.outputs()
+    typer.echo(f"{store.root} ({'locked' if store.locked else 'unlocked'})")
+    _table(store.list_models(), ["alias", "folder", "runs", "attempts", "last_seen"])
+
+
+@outputs_app.command("path")
+def outputs_path_cmd(
+    model: Annotated[str, typer.Option("--model", help="Model label / alias.")],
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Print the folder that holds a model's code."""
+    ctx = load_ctx(config, models, need_tasks=False)
+    typer.echo(ctx.outputs().model_dir(model))
+
+
+@outputs_app.command("export")
+def outputs_export(
+    model: Annotated[str, typer.Option("--model", help="Model label / alias.")],
+    to: Annotated[Path, typer.Option(help="Destination directory for an unlocked copy.")],
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Copy a model's folder somewhere readable (the store itself stays locked)."""
+    ctx = load_ctx(config, models, need_tasks=False)
+    try:
+        target = ctx.outputs().export(model, to.expanduser())
+    except FileNotFoundError as exc:
+        raise _fail(str(exc)) from None
+    typer.echo(f"exported to {target}")
+
+
+@outputs_app.command("unlock")
+def outputs_unlock(config: ConfigOpt = None, models: ModelsOpt = None) -> None:
+    """Make the outputs folder readable (e.g. to browse it). Lock again before running agents."""
+    ctx = load_ctx(config, models, need_tasks=False)
+    ctx.outputs().unlock()
+    typer.secho(
+        "unlocked - run `bench outputs lock` before starting another model's agent",
+        fg=typer.colors.YELLOW,
+    )
+
+
+@outputs_app.command("lock")
+def outputs_lock(config: ConfigOpt = None, models: ModelsOpt = None) -> None:
+    """Lock the outputs folder (permissions 000) so unsandboxed agents get 'Permission denied'."""
+    ctx = load_ctx(config, models, need_tasks=False)
+    ctx.outputs().lock()
+    typer.echo("locked")
 
 
 def main() -> None:

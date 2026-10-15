@@ -21,8 +21,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import tempfile
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -36,6 +40,7 @@ from engineering_llm_bench.config.models import BenchmarkConfig
 from engineering_llm_bench.domain import Profile
 from engineering_llm_bench.importing.importer import RunImporter
 from engineering_llm_bench.importing.schema import ImportedAttempt, ImportedRunMeta, ImportFile
+from engineering_llm_bench.outputs import ModelOutputs
 from engineering_llm_bench.storage.artifacts import ArtifactStore, atomic_write_bytes
 from engineering_llm_bench.storage.db import Store, utcnow
 from engineering_llm_bench.workspace.manager import (
@@ -104,6 +109,8 @@ class CollectResult:
     submissions: list[TaskSubmission]
     warnings: list[str]
     run_id: str | None = None
+    archived_to: Path | None = None
+    session_removed: bool = False
 
 
 def _slug(text: str) -> str:
@@ -328,6 +335,8 @@ def collect_session(
     only_attempted: bool = False,
     dry_run: bool = False,
     force: bool = False,
+    outputs: ModelOutputs | None = None,
+    keep_session: bool = False,
 ) -> CollectResult:
     """Validate a session folder and (unless ``dry_run``) evaluate and persist it as a run."""
     manifest, trusted_path, warnings = _load_manifest(session_dir, artifacts_dir)
@@ -339,6 +348,80 @@ def collect_session(
             f"{[p['run_id'] for p in previous]}; collecting again would double-count it. "
             "Pass --force to collect anyway."
         )
+    if outputs is None:
+        outputs = ModelOutputs(artifacts_dir / "model_outputs", bench.isolation.lock_outputs)
+    with ExitStack() as stack:
+        source = session_dir
+        if not (session_dir / "tasks").is_dir():
+            source = stack.enter_context(_restored_session(outputs, previous, session_id))
+        return _collect(
+            source,
+            session_dir,
+            manifest,
+            trusted_path,
+            warnings,
+            registry,
+            bench,
+            store,
+            artifacts,
+            outputs,
+            dict(
+                model_label=model_label,
+                harness_label=harness_label,
+                harness_version=harness_version,
+                provider_label=provider_label,
+                remote=remote,
+                session_minutes=session_minutes,
+                notes=notes,
+                only_attempted=only_attempted,
+                dry_run=dry_run,
+                keep_session=keep_session,
+            ),
+        )
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+@contextmanager
+def _restored_session(
+    outputs: ModelOutputs, previous: list[dict[str, Any]], session_id: str
+) -> Iterator[Path]:
+    """A temporary copy of an already collected (and removed) session, from its archive."""
+    with outputs.unlocked():
+        archives = [
+            outputs.model_dir(p["model_label"]) / "byok_sessions" / session_id
+            for p in previous
+            if p.get("model_label")
+        ]
+        found = next((a for a in archives if (a / "tasks").is_dir()), None)
+        if found is None:
+            raise ConfigError(
+                f"session {session_id} has no tasks/ folder and no archived copy was found in "
+                f"{outputs.root}"
+            )
+        tmp = Path(tempfile.mkdtemp(prefix="elb-recollect-"))
+        shutil.copytree(found, tmp / "session", symlinks=True)
+    try:
+        yield tmp / "session"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _collect(
+    source: Path,
+    session_dir: Path,
+    manifest: dict[str, Any],
+    trusted_path: Path | None,
+    warnings: list[str],
+    registry: TaskRegistry,
+    bench: BenchmarkConfig,
+    store: Store | None,
+    artifacts: ArtifactStore | None,
+    outputs: ModelOutputs,
+    opts: dict[str, Any],
+) -> CollectResult:
+    session_id = manifest["session_id"]
+    model_label: str = opts["model_label"]
+    only_attempted: bool = opts["only_attempted"]
     submissions: list[TaskSubmission] = []
     for entry in manifest["tasks"]:
         task_id = entry["task_id"]
@@ -350,40 +433,44 @@ def collect_session(
                 f"{task_id}: task changed since the session was prepared "
                 f"(v{entry.get('version')} -> v{task.spec.version}); results are not comparable"
             )
-        submissions.append(inspect_submission(task, session_dir, entry["folder"]))
+        submissions.append(inspect_submission(task, source, entry["folder"]))
     result = CollectResult(session_id, submissions, warnings)
-    if dry_run:
+    if opts["dry_run"]:
         return result
     if store is None or artifacts is None:
         raise ConfigError("store and artifacts are required unless dry_run")
 
     attempts, overlays = _build_attempts(submissions, registry, only_attempted)
     run_notes = [f"BYOK session {session_id}"]
-    if session_minutes is not None:
-        run_notes.append(f"whole-session wall time reported by user: {session_minutes} min")
-    if notes:
-        run_notes.append(notes)
+    if opts["session_minutes"] is not None:
+        run_notes.append(f"whole-session wall time reported by user: {opts['session_minutes']} min")
+    if opts["notes"]:
+        run_notes.append(opts["notes"])
     doc = ImportFile(
         run=ImportedRunMeta(
             model_label=model_label,
-            provider_label=provider_label,
-            harness=harness_label,
-            harness_version=harness_version,
-            remote=remote,
+            provider_label=opts["provider_label"],
+            harness=opts["harness_label"],
+            harness_version=opts["harness_version"],
+            remote=opts["remote"],
             notes=" | ".join(run_notes),
         ),
         attempts=attempts,
     )
-    importer = RunImporter(bench, registry, store, artifacts)
+    importer = RunImporter(bench, registry, store, artifacts, outputs)
     imported = importer.import_document(
         doc,
-        session_dir,
+        source,
         f"byok-session:{session_id}",
         overlays=overlays,
         run_config={"byok_session": session_id, "only_attempted": only_attempted},
     )
     result.run_id = imported.run_id
     result.warnings.extend(imported.warnings)
+    result.archived_to = archive_session(source, importer.outputs, model_label, session_id)
+    if not opts["keep_session"]:
+        remove_session_workspace(session_dir, session_id, model_label)
+        result.session_removed = True
     if trusted_path is not None:
         manifest.setdefault("collected_runs", []).append(
             {"run_id": imported.run_id, "model_label": model_label, "at": utcnow()}
@@ -486,3 +573,49 @@ def estimate_timing(submissions: list[TaskSubmission], started_at: float | None)
         "observed_span_s": span,
         "tasks": tasks,
     }
+
+
+def archive_session(
+    session_dir: Path, outputs: ModelOutputs, model_label: str, session_id: str
+) -> Path:
+    """Copy the raw session (agent's files, RESULT.md, rejected edits) into the model's private
+    output folder. Symlinks are copied as links, never followed."""
+    with outputs.unlocked():
+        dest = outputs.model_dir(model_label) / "byok_sessions" / session_id
+        shutil.copytree(
+            session_dir,
+            dest,
+            symlinks=True,
+            ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "build", "*.o"),
+            dirs_exist_ok=True,
+        )
+        return dest
+
+
+def remove_session_workspace(session_dir: Path, session_id: str, model_label: str) -> None:
+    """Delete the agent-visible working copy (already archived) so a later model's agent cannot
+    find this model's code; leave a short note behind."""
+    tasks = session_dir / "tasks"
+    if tasks.is_dir():
+        shutil.rmtree(tasks)
+    (session_dir / "starting_point.md").unlink(missing_ok=True)
+    (session_dir / "COLLECTED.md").write_text(
+        f"Session {session_id} was collected for the benchmark. The code was moved to the "
+        "benchmark's private per-model output folder (`bench outputs list`).\n",
+        encoding="utf-8",
+    )
+
+
+def uncollected_sibling_sessions(target: Path) -> list[Path]:
+    """Other session folders next to ``target`` that still contain an agent's working copy."""
+    parent = target.expanduser().resolve().parent
+    if not parent.is_dir():
+        return []
+    return sorted(
+        p
+        for p in parent.iterdir()
+        if p.is_dir()
+        and p != target
+        and (p / ".bench" / "session.json").is_file()
+        and (p / "tasks").is_dir()
+    )

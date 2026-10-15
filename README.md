@@ -28,6 +28,25 @@ python byok/prepare_session.py --profile standard --out ~/elb-byok-sessions/qwen
 python byok/collect_results.py ~/elb-byok-sessions/qwen38-run1 --model-label "strata/qwen-3.8" --serve
 ```
 
+## Per-model output folders (invisible to other models)
+
+Every attempt's final code is saved per model:
+
+```
+artifacts/model_outputs/<model>/
+  MODEL.json
+  runs/<run_id>/<task_id>__r<N>/{code/, diff.patch, meta.json}
+  byok_sessions/<session_id>/       # Copilot BYOK sessions, moved here by `byok collect`
+```
+
+* Commands run for a model (agent tools, external agent CLIs, evaluators) see this folder,
+  `artifacts/`, `tasks/`, `.git`, BYOK sessions and other attempts' workspaces as **empty**
+  (Linux mount namespaces, Python ≥ 3.12; `isolation.filesystem` in the config).
+* The folder is **locked** (`chmod 000`) whenever the benchmark is not writing to it. Use
+  `bench outputs list | path --model M | export --model M --to DIR | unlock | lock` to inspect it.
+* Each attempt's `code_location.txt` artifact in the dashboard points to its folder.
+* See [docs/security.md](docs/security.md#controls) for the guarantees and limits.
+
 ## Quick start
 
 ```bash
@@ -70,6 +89,7 @@ Tasks whose runtime is missing are reported as **skipped** with the reason - nev
 | `bench dashboard [--host --port]` | local dashboard (loopback by default) |
 | `bench import-run --file F [--no-evaluate] [--keep-transcripts]` / `bench export-run` | manual/IDE runs (e.g. Copilot BYOK) |
 | `bench byok prepare` / `bench byok collect` | Copilot BYOK sessions: starting_point.md + collection (same as `byok/*.py`) |
+| `bench outputs list\|path\|export\|unlock\|lock` | per-model output folders (locked by default) |
 | `bench perf discover\|probe` / `bench run --perf-probe` | model-server info, tokens/s, TTFT, GPU share, session token counters |
 | `bench task validate PATH` | prove fixture fails, reference passes, broken fails |
 | `bench review export\|import\|judge` | blind human review, judge models (stored separately) |
@@ -130,6 +150,8 @@ CI: `.github/workflows/ci.yml` (lint, types, tests on 3.11/3.12, smoke run, HTML
 
 ## Known limitations
 
+* Hiding other models' folders needs Linux and Python ≥ 3.12 (mount namespaces); elsewhere
+  only the `chmod 000` lock applies. Copilot BYOK agents run outside the sandbox (see byok/README.md).
 * The command sandbox is defence in depth, not a security boundary; run untrusted models in a
   container or VM (see docs/security.md).
 * GitHub Copilot BYOK cannot be driven programmatically; use the `byok/` session workflow

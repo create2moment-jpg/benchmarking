@@ -18,6 +18,7 @@ VM when running untrusted models against sensitive hosts.
 
 from __future__ import annotations
 
+import ctypes
 import fcntl
 import functools
 import importlib.util
@@ -87,6 +88,13 @@ _SIOCSIFFLAGS = 0x8914
 _IFF_UP = 0x1
 _CLONE_NEWNET = 0x40000000
 _CLONE_NEWUSER = 0x10000000
+_CLONE_NEWNS = 0x00020000
+_MS_RDONLY = 1
+_MS_NOSUID = 2
+_MS_NODEV = 4
+_MS_NOEXEC = 8
+_MS_REC = 0x4000
+_MS_PRIVATE = 1 << 18
 
 
 def _write_proc(path: str, text: str) -> None:
@@ -97,22 +105,79 @@ def _write_proc(path: str, text: str) -> None:
         os.close(fd)
 
 
-def _enter_network_namespace() -> None:
-    """Child-side (after fork, before exec): enter a fresh network namespace that has only a
-    loopback interface, and bring loopback up so local IPC (e.g. Spark's py4j) still works."""
+@dataclass(frozen=True)
+class SandboxSpec:
+    """What the child enters before exec: a private network (loopback only) and/or a private
+    mount view in which ``masks`` (and every attempt directory under ``workspaces_root`` other
+    than ``keep``) are covered by empty, read-only tmpfs mounts."""
+
+    net: bool
+    masks: tuple[str, ...] = ()
+    workspaces_root: str | None = None
+    keep: str | None = None
+
+    @property
+    def mounts(self) -> bool:
+        return bool(self.masks or self.workspaces_root)
+
+
+_libc: Any = None
+
+
+def _load_libc() -> Any:
+    global _libc  # noqa: PLW0603 - loaded once in the parent, used in forked children
+    if _libc is None:
+        _libc = ctypes.CDLL(None, use_errno=True)
+    return _libc
+
+
+def _mount_empty(target: str) -> None:
+    """Cover ``target`` with an empty read-only tmpfs (in the current mount namespace)."""
+    flags = _MS_NOSUID | _MS_NODEV | _MS_NOEXEC | _MS_RDONLY
+    if _libc.mount(b"elb-hidden", target.encode(), b"tmpfs", flags, b"size=4k,mode=0555") != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, f"cannot hide {target}: {os.strerror(err)}")
+
+
+def _enter_sandbox(spec: SandboxSpec) -> None:
+    """Child-side (after fork, before exec). Network: fresh namespace with only loopback (brought
+    up so local IPC such as Spark's py4j still works). Filesystem: private mount namespace in
+    which other models' outputs, results, hidden tests/reference solutions and other attempts'
+    workspaces are replaced by empty directories."""
     unshare = getattr(os, "unshare")  # noqa: B009 - Python >= 3.12 only; guarded by caller
+    flags = (_CLONE_NEWNET if spec.net else 0) | (_CLONE_NEWNS if spec.mounts else 0)
     uid, gid = os.getuid(), os.getgid()
     if uid == 0:
-        unshare(_CLONE_NEWNET)
+        unshare(flags)
     else:
-        unshare(_CLONE_NEWUSER | _CLONE_NEWNET)
+        unshare(_CLONE_NEWUSER | flags)
         _write_proc("/proc/self/setgroups", "deny")
         _write_proc("/proc/self/uid_map", f"{uid} {uid} 1")
         _write_proc("/proc/self/gid_map", f"{gid} {gid} 1")
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        req = struct.pack("16sH", b"lo", 0)
-        flags = struct.unpack("16sH", fcntl.ioctl(sock, _SIOCGIFFLAGS, req)[:18])[1]
-        fcntl.ioctl(sock, _SIOCSIFFLAGS, struct.pack("16sH", b"lo", flags | _IFF_UP))
+    if spec.net:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            req = struct.pack("16sH", b"lo", 0)
+            iff = struct.unpack("16sH", fcntl.ioctl(sock, _SIOCGIFFLAGS, req)[:18])[1]
+            fcntl.ioctl(sock, _SIOCSIFFLAGS, struct.pack("16sH", b"lo", iff | _IFF_UP))
+    if spec.mounts:
+        # Stop our mounts from propagating back to the host.
+        if _libc.mount(b"none", b"/", None, _MS_REC | _MS_PRIVATE, None) != 0:
+            err = ctypes.get_errno()
+            raise OSError(err, f"cannot make mounts private: {os.strerror(err)}")
+        targets = list(spec.masks)
+        if spec.workspaces_root and os.path.isdir(spec.workspaces_root):
+            targets += [
+                os.path.join(spec.workspaces_root, name)
+                for name in os.listdir(spec.workspaces_root)
+                if os.path.join(spec.workspaces_root, name) != spec.keep
+            ]
+        for target in targets:
+            if os.path.isdir(target):
+                _mount_empty(target)
+
+
+def _enter_network_namespace() -> None:
+    _enter_sandbox(SandboxSpec(net=True))
 
 
 @functools.cache
@@ -138,6 +203,31 @@ def _inprocess_netns_available() -> bool:
 
 
 @functools.cache
+def mount_hiding_available() -> bool:
+    """True when commands can get a private filesystem view (Linux mount namespaces)."""
+    if sys.platform != "linux" or not hasattr(os, "unshare"):
+        return False
+    _load_libc()
+    with tempfile.TemporaryDirectory() as tmp:
+        secret = Path(tmp) / "hidden"
+        secret.mkdir()
+        (secret / "x").write_text("visible")
+        probe = f"import os,sys; sys.exit(0 if not os.listdir({str(secret)!r}) else 3)"
+        spec = SandboxSpec(net=False, masks=(str(secret),))
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", probe],
+                capture_output=True,
+                timeout=10,
+                check=False,
+                preexec_fn=lambda: _enter_sandbox(spec),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return proc.returncode == 0
+
+
+@functools.cache
 def _unshare_binary_available() -> bool:
     exe = shutil.which("unshare")
     if exe is None or sys.platform != "linux":
@@ -152,6 +242,10 @@ def _unshare_binary_available() -> bool:
 def network_namespace_available() -> bool:
     """True when commands can be run without external network on this host (Linux)."""
     return _inprocess_netns_available() or _unshare_binary_available()
+
+
+def filesystem_isolation_method() -> str:
+    return "mount namespace (other models' folders hidden)" if mount_hiding_available() else "none"
 
 
 def isolation_method() -> str:
@@ -213,8 +307,18 @@ class CommandRunner:
     limits: LimitsConfig
     network: str = "deny_if_possible"  # deny_if_possible | deny | allow
     extra_env: Mapping[str, str] = field(default_factory=dict)
+    #: Directories made invisible to every command (other models' outputs, results, tasks...).
+    hidden_paths: tuple[Path, ...] = ()
+    #: Root holding all attempt workspaces; sibling attempts are hidden from each command.
+    workspaces_root: Path | None = None
+    filesystem: str = "hide_if_possible"  # hide_if_possible | hide | off
 
     def __post_init__(self) -> None:
+        if self.filesystem == "hide" and not mount_hiding_available():
+            raise CommandRefusedError(
+                "isolation.filesystem=hide but Linux mount namespaces are unavailable here "
+                "(needs Linux and Python >= 3.12); use hide_if_possible or run in a container"
+            )
         if self.network == "deny" and not network_namespace_available():
             raise CommandRefusedError(
                 "isolation.network=deny but Linux network namespaces are unavailable here;"
@@ -242,23 +346,48 @@ class CommandRunner:
         env.update(self.extra_env)
         return env
 
-    def _isolate(self, full: list[str], allow_network: bool = False) -> tuple[list[str], bool]:
-        """Return (argv, enter_netns_in_child) according to the network policy."""
-        if allow_network or self.network == "allow":
-            return full, False
-        if _inprocess_netns_available():
-            return full, True
-        unshare = shutil.which("unshare")
-        if unshare and _unshare_binary_available():
-            return [unshare, "-rn", "--", *full], False
-        return full, False
+    def _masks(self, cwd: Path) -> tuple[tuple[str, ...], str | None, str | None]:
+        """Paths to hide for a command running in ``cwd`` (never the cwd, its parents or the
+        interpreter), plus the workspaces root and the attempt directory to keep visible."""
+        if self.filesystem == "off" or not mount_hiding_available():
+            return (), None, None
+        cwd_r = cwd.resolve()
+        keep_paths = [cwd_r, Path(sys.executable).resolve()]
+        masks = []
+        for path in self.hidden_paths:
+            p = path.resolve()
+            if p.is_dir() and not any(k.is_relative_to(p) for k in keep_paths):
+                masks.append(str(p))
+        root = keep = None
+        if self.workspaces_root is not None and cwd_r.is_relative_to(
+            self.workspaces_root.resolve()
+        ):
+            root_r = self.workspaces_root.resolve()
+            root = str(root_r)
+            keep = str(root_r / cwd_r.relative_to(root_r).parts[0])
+        return tuple(masks), root, keep
 
-    def _preexec(self, memory_mb: int | None, netns: bool) -> Callable[[], None]:
+    def _isolate(
+        self, full: list[str], cwd: Path, allow_network: bool = False
+    ) -> tuple[list[str], SandboxSpec | None]:
+        """Return (argv, sandbox to enter in the child) according to the isolation policy."""
+        masks, root, keep = self._masks(cwd)
+        want_net = not (allow_network or self.network == "allow")
+        if want_net and _inprocess_netns_available():
+            return full, SandboxSpec(True, masks, root, keep)
+        spec = SandboxSpec(False, masks, root, keep) if (masks or root) else None
+        if want_net:
+            unshare = shutil.which("unshare")
+            if unshare and _unshare_binary_available() and spec is None:
+                return [unshare, "-rn", "--", *full], None
+        return full, spec
+
+    def _preexec(self, memory_mb: int | None, sandbox: SandboxSpec | None) -> Callable[[], None]:
         limits = self.limits
 
         def apply() -> None:  # runs in the child between fork and exec
-            if netns:
-                _enter_network_namespace()
+            if sandbox is not None:
+                _enter_sandbox(sandbox)
             cpu = limits.cpu_seconds
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 5))
             fsize = limits.max_written_file_mb * 1024 * 1024
@@ -305,7 +434,7 @@ class CommandRunner:
             for arg in argv[1:]:
                 _check_argument(arg, root, cwd)
         full = [*resolve_executable(name), *argv[1:]]
-        full, netns = self._isolate(full)
+        full, netns = self._isolate(full, cwd)
         timeout = min(timeout_s or self.limits.command_timeout_s, self.limits.command_timeout_s)
         mem = self.limits.memory_mb if memory_mb == -1 else memory_mb
         scratch.mkdir(parents=True, exist_ok=True)
@@ -333,7 +462,7 @@ class CommandRunner:
         for arg in argv[1:]:
             _check_argument(arg, root, cwd)
         full = [str(target), *argv[1:]]
-        full, netns = self._isolate(full)
+        full, netns = self._isolate(full, cwd)
         timeout = min(timeout_s or self.limits.command_timeout_s, self.limits.command_timeout_s)
         mem = self.limits.memory_mb if memory_mb == -1 else memory_mb
         scratch.mkdir(parents=True, exist_ok=True)
@@ -360,10 +489,10 @@ class CommandRunner:
         exe = shutil.which(full_argv[0]) if full_argv else None
         if exe is None:
             raise CommandRefusedError(f"harness executable {full_argv[:1]} not found")
-        full, netns = self._isolate([exe, *full_argv[1:]], allow_network)
+        full, netns = self._isolate([exe, *full_argv[1:]], cwd, allow_network)
         extra = {k: os.environ[k] for k in env_passthrough if k in os.environ}
         scratch.mkdir(parents=True, exist_ok=True)
-        runner = CommandRunner(self.limits, "allow", {**self.extra_env, **extra})
+        runner = CommandRunner(self.limits, "allow", {**self.extra_env, **extra}, filesystem="off")
         return runner._execute(
             list(full_argv), full, cwd, scratch, timeout_s, cancel, None, stdin_text, netns
         )
@@ -378,7 +507,7 @@ class CommandRunner:
         cancel: CancelToken | None,
         memory_mb: int | None,
         stdin_text: str | None,
-        netns: bool = False,
+        netns: SandboxSpec | None = None,
     ) -> CommandResult:
         start = time.monotonic()
         timed_out = cancelled = False

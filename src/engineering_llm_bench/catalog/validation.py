@@ -13,7 +13,7 @@ from engineering_llm_bench.domain import CheckStatus, ExecutionMode
 from engineering_llm_bench.evaluation.evaluator import EvaluationOutcome, evaluate
 from engineering_llm_bench.harnesses.base import HarnessResult
 from engineering_llm_bench.tools.runner import CommandRunner
-from engineering_llm_bench.workspace.manager import prepare_workspace
+from engineering_llm_bench.workspace.manager import prepare_workspace, workspaces_root
 
 REFERENCE_SUMMARY = (
     "Reference solution. Verified by running the tests. Limitations: none known for the task scope."
@@ -33,7 +33,12 @@ def _evaluate_variant(task: Task, bench: BenchmarkConfig, overlay: str | None) -
         if overlay is not None:
             workspace.apply_overlay(task.root / overlay)
         summary = REFERENCE_SUMMARY if overlay == "reference" else ""
-        runner = CommandRunner(bench.limits, bench.isolation.network)
+        runner = CommandRunner(
+            bench.limits,
+            bench.isolation.network,
+            workspaces_root=workspaces_root(),
+            filesystem=bench.isolation.filesystem,
+        )
         return evaluate(
             task,
             workspace,

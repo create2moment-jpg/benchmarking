@@ -6,6 +6,7 @@ suite_version: "2026.10.0"
 tasks_dir: tasks
 artifacts_dir: artifacts          # generated, gitignored
 database: artifacts/bench.db
+outputs_dir: artifacts/model_outputs   # one private folder per model with all its code (see README)
 
 # Sending prompts/source to remote providers requires explicit consent. Prefer --allow-remote per run.
 allow_remote_providers: false
@@ -56,6 +57,11 @@ limits:
 isolation:
   network: deny_if_possible     # deny | deny_if_possible | allow  (uses `unshare -rn` on Linux)
   keep_workspaces: false
+  # Hide other models' code from every command run for a model: per-model output folders,
+  # results, the task catalogue (hidden tests, reference solutions), .git, BYOK sessions and
+  # other attempts' workspaces appear as empty directories (Linux mount namespace, Python >= 3.12).
+  filesystem: hide_if_possible  # hide (refuse to run without it) | hide_if_possible | off
+  lock_outputs: true            # chmod 000 on outputs_dir while the benchmark is not writing to it
 
 concurrency:
   max_parallel_attempts: 1      # do not hammer a single local GPU / provider by default

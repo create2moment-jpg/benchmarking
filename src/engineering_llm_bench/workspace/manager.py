@@ -17,6 +17,7 @@ from __future__ import annotations
 import difflib
 import fnmatch
 import hashlib
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -180,9 +181,20 @@ class Workspace:
             shutil.rmtree(self.base, ignore_errors=True)
 
 
+def workspaces_root() -> Path:
+    """Private parent of all attempt workspaces (mode 700). Commands run for one attempt see
+    every sibling attempt directory as empty (mount-namespace hiding)."""
+    root = (
+        Path(tempfile.gettempdir())
+        / f"elb-workspaces-{os.getuid() if hasattr(os, 'getuid') else 0}"
+    )
+    root.mkdir(mode=0o700, exist_ok=True)
+    return root
+
+
 def prepare_workspace(task: Task, keep: bool = False) -> Workspace:
     """Create a fresh workspace from the task fixture. Nothing from previous runs leaks in."""
-    base = Path(tempfile.mkdtemp(prefix="elb-"))
+    base = Path(tempfile.mkdtemp(prefix="elb-", dir=workspaces_root()))
     (base / "ws").mkdir()
     (base / "scratch").mkdir()
     copy_tree(task.fixture_dir, base / "ws")

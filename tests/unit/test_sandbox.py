@@ -15,6 +15,7 @@ from engineering_llm_bench.tools.runner import (
     LOCAL_BINARIES,
     CommandRefusedError,
     CommandRunner,
+    mount_hiding_available,
     network_namespace_available,
 )
 from engineering_llm_bench.workspace.manager import (
@@ -160,3 +161,51 @@ def test_python_resolves_to_benchmark_interpreter(ws: Path) -> None:
         CommandRunner(LimitsConfig()), ws, ["python", "-c", "import sys; print(sys.executable)"]
     )
     assert Path(res.stdout.strip()).resolve() == Path(sys.executable).resolve()
+
+
+LIST_DIRS = (
+    "import os\n"
+    "for d in {dirs!r}:\n"
+    "    try:\n"
+    "        print(d, sorted(os.listdir(d)))\n"
+    "    except OSError as e:\n"
+    "        print(d, 'ERR', e.errno)\n"
+)
+
+
+@pytest.mark.skipif(not mount_hiding_available(), reason="no mount namespaces here")
+def test_hidden_paths_and_other_workspaces_are_invisible(tmp_path: Path) -> None:
+    secret = tmp_path / "model_outputs"
+    (secret / "other-model").mkdir(parents=True)
+    (secret / "other-model" / "solution.py").write_text("x = 1\n")
+    root = tmp_path / "workspaces"
+    mine, other = root / "elb-a", root / "elb-b"
+    (mine / "ws").mkdir(parents=True)
+    (other / "ws").mkdir(parents=True)
+    (other / "ws" / "code.py").write_text("y = 2\n")
+    (mine / "ws" / "own.py").write_text("z = 3\n")
+    runner = CommandRunner(LimitsConfig(), hidden_paths=(secret,), workspaces_root=root)
+    res = runner.run(
+        ["python", "-c", LIST_DIRS.format(dirs=[str(secret), str(other), str(mine / "ws")])],
+        cwd=mine / "ws",
+        root=mine / "ws",
+        scratch=mine / "scratch",
+        allowed={"python"},
+    )
+    assert res.ok, res.stderr
+    lines = dict(line.split(" ", 1) for line in res.stdout.splitlines())
+    assert lines[str(secret)] == "[]"
+    assert lines[str(other)] == "[]"
+    assert "own.py" in lines[str(mine / "ws")]
+    # The host view is untouched.
+    assert (secret / "other-model" / "solution.py").is_file()
+    assert (other / "ws" / "code.py").is_file()
+
+
+def test_filesystem_hide_is_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import engineering_llm_bench.tools.runner as runner_mod  # noqa: PLC0415
+
+    monkeypatch.setattr(runner_mod, "mount_hiding_available", lambda: False)
+    with pytest.raises(CommandRefusedError, match="filesystem=hide"):
+        CommandRunner(LimitsConfig(), filesystem="hide")
+    CommandRunner(LimitsConfig(), filesystem="hide_if_possible")  # degrades silently
