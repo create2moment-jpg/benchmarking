@@ -73,6 +73,26 @@ Use repeats (`--repeats N`, extended profile default 2) only where outputs are n
 (sampling temperature > 0, remote models); deterministic local runs at temperature 0 with a
 seed rarely need them.
 
+## Performance and profiling (secondary)
+
+Recorded alongside outcomes, never folded into scores:
+
+* **Time profile per attempt**: agent wall time, time waiting for the model (`model_time_s`,
+  sum of response latencies), tools/harness overhead (wall - model) and evaluation time.
+* **Agent-side throughput**: output tokens / model time per attempt (`Agent out tok/s`) - what the
+  agent experienced, including prompt processing and queueing.
+* **Server-side throughput** (`bench run --perf-probe`, `bench byok collect` with an endpoint,
+  `bench perf probe`): generation and prompt-processing tokens/s, time to first token and cold
+  load from a fixed calibration prompt set; Ollama's server-side timings are used when present.
+* **Server/model facts**: quantization, parameter count, context length, GPU-resident share.
+* **Session token usage** from Prometheus counters (vLLM, llama.cpp) before vs after.
+* **Compute profile of evaluation**: CPU seconds and peak RSS of every evaluator command
+  (`wait4` rusage), aggregated per attempt; GPU utilisation/memory sampled with `nvidia-smi`
+  during calibration on local servers.
+
+Throughput numbers depend on hardware, concurrent load and server settings; compare them only
+within one machine and record what else was running.
+
 ## Limitations and interpretation
 
 * Small starter catalogue: 14 tasks. Differences of a few points on a handful of tasks are noise.

@@ -55,6 +55,10 @@ bench dashboard</pre>
     <div class="table-wrap"><table id="compare-dims"></table></div>
     <h2>Per task</h2>
     <div class="table-wrap"><table id="compare-tasks"></table></div>
+    <h2>Model server, throughput and time profile <span class="muted">(secondary to task outcomes)</span></h2>
+    <div class="table-wrap"><table id="compare-perf"></table></div>
+    <div class="muted" id="perf-note">Server columns come from probing the model endpoint (calibration with fixed prompts);
+      "agent" columns come from the benchmark's own attempts. "unknown" = not measured (e.g. no endpoint given, Copilot hides usage).</div>
   </section>
 
   <section id="history" class="tab" hidden>

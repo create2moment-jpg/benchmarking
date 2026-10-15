@@ -92,6 +92,16 @@ class EvalContext:
     summary: str
     memory_mb: int | None = -1
     _baseline_dir: Path | None = None
+    cpu_s: float = 0.0
+    max_rss_mb: float = 0.0
+
+    def record(self, res: CommandResult) -> CommandResult:
+        """Accumulate the compute profile of evaluator commands."""
+        if res.cpu_s is not None:
+            self.cpu_s += res.cpu_s
+        if res.max_rss_mb is not None:
+            self.max_rss_mb = max(self.max_rss_mb, res.max_rss_mb)
+        return res
 
     def baseline_dir(self) -> Path:
         if self._baseline_dir is None:
@@ -99,15 +109,17 @@ class EvalContext:
         return self._baseline_dir
 
     def run(self, argv: list[str], cwd: Path, timeout_s: float | None) -> CommandResult:
-        return self.runner.run(
-            argv,
-            cwd=cwd,
-            root=cwd,
-            scratch=self.workspace.scratch,
-            allowed=self.allowlist,
-            timeout_s=timeout_s,
-            cancel=self.cancel,
-            memory_mb=self.memory_mb,
+        return self.record(
+            self.runner.run(
+                argv,
+                cwd=cwd,
+                root=cwd,
+                scratch=self.workspace.scratch,
+                allowed=self.allowlist,
+                timeout_s=timeout_s,
+                cancel=self.cancel,
+                memory_mb=self.memory_mb,
+            )
         )
 
 
@@ -278,29 +290,33 @@ def check_cpp_test(spec: CppTestCheck, ctx: EvalContext) -> CheckResult:
         binary,
     ]
     allowed = ctx.allowlist | {spec.compiler, LOCAL_BINARIES}
-    build = ctx.runner.run(
-        compile_argv,
-        cwd=ctx.eval_dir,
-        root=ctx.eval_dir,
-        scratch=ctx.workspace.scratch,
-        allowed=allowed,
-        timeout_s=spec.timeout_s,
-        cancel=ctx.cancel,
-        memory_mb=None,
+    build = ctx.record(
+        ctx.runner.run(
+            compile_argv,
+            cwd=ctx.eval_dir,
+            root=ctx.eval_dir,
+            scratch=ctx.workspace.scratch,
+            allowed=allowed,
+            timeout_s=spec.timeout_s,
+            cancel=ctx.cancel,
+            memory_mb=None,
+        )
     )
     if not build.ok:
         return _result(
             spec, 0.0, f"compilation failed (exit={build.exit_code})", build.summary(20_000)
         )
-    run = ctx.runner.run(
-        [f"./{binary}"],
-        cwd=ctx.eval_dir,
-        root=ctx.eval_dir,
-        scratch=ctx.workspace.scratch,
-        allowed=allowed,
-        timeout_s=spec.timeout_s,
-        cancel=ctx.cancel,
-        memory_mb=ctx.memory_mb,
+    run = ctx.record(
+        ctx.runner.run(
+            [f"./{binary}"],
+            cwd=ctx.eval_dir,
+            root=ctx.eval_dir,
+            scratch=ctx.workspace.scratch,
+            allowed=allowed,
+            timeout_s=spec.timeout_s,
+            cancel=ctx.cancel,
+            memory_mb=ctx.memory_mb,
+        )
     )
     log = build.summary(4000) + "\n\n" + run.summary(20_000)
     if run.timed_out:

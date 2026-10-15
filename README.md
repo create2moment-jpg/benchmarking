@@ -70,6 +70,7 @@ Tasks whose runtime is missing are reported as **skipped** with the reason - nev
 | `bench dashboard [--host --port]` | local dashboard (loopback by default) |
 | `bench import-run --file F [--no-evaluate] [--keep-transcripts]` / `bench export-run` | manual/IDE runs (e.g. Copilot BYOK) |
 | `bench byok prepare` / `bench byok collect` | Copilot BYOK sessions: starting_point.md + collection (same as `byok/*.py`) |
+| `bench perf discover\|probe` / `bench run --perf-probe` | model-server info, tokens/s, TTFT, GPU share, session token counters |
 | `bench task validate PATH` | prove fixture fails, reference passes, broken fails |
 | `bench review export\|import\|judge` | blind human review, judge models (stored separately) |
 

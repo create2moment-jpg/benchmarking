@@ -111,6 +111,8 @@ def summarize_group(attempts: list[dict[str, Any]]) -> dict[str, Any]:
             "of": len(executed),
         },
         "domains": {d: describe(v) for d, v in sorted(domains.items())},
+        "time_profile": time_profile(executed),
+        "compute": compute_profile(executed),
         "warnings": warnings,
     }
 
@@ -178,3 +180,44 @@ def notes(a: dict[str, Any]) -> list[str]:
     except json.JSONDecodeError:
         return []
     return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def _vals(rows: list[dict[str, Any]], key: str) -> list[float]:
+    return [float(r[key]) for r in rows if r.get(key) is not None]
+
+
+def time_profile(executed: list[dict[str, Any]]) -> dict[str, Any]:
+    """Where attempt time goes: waiting for the model vs. tools/harness vs. evaluation.
+
+    ``e2e_output_tps`` = output tokens / model time per attempt: what the agent experienced
+    (includes prompt processing and queueing), unlike a server's pure generation speed.
+    """
+    model = _vals(executed, "model_time_s")
+    tools = [
+        float(r["agent_wall_s"]) - float(r["model_time_s"])
+        for r in executed
+        if r.get("agent_wall_s") is not None and r.get("model_time_s") is not None
+    ]
+    tps = [
+        float(r["output_tokens"]) / float(r["model_time_s"])
+        for r in executed
+        if r.get("output_tokens") and r.get("model_time_s")
+    ]
+    return {
+        "model_s_median": percentile(model, 50),
+        "model_s_total": round(sum(model), 3) if model else None,
+        "tools_and_overhead_s_median": percentile(tools, 50),
+        "eval_s_median": percentile(_vals(executed, "eval_wall_s"), 50),
+        "e2e_output_tps_median": round(m, 2) if (m := percentile(tps, 50)) is not None else None,
+        "e2e_output_tps_n": len(tps),
+    }
+
+
+def compute_profile(executed: list[dict[str, Any]]) -> dict[str, Any]:
+    cpu = _vals(executed, "eval_cpu_s")
+    rss = _vals(executed, "eval_max_rss_mb")
+    return {
+        "eval_cpu_s_median": percentile(cpu, 50),
+        "eval_cpu_s_total": round(sum(cpu), 3) if cpu else None,
+        "eval_max_rss_mb_peak": max(rss) if rss else None,
+    }

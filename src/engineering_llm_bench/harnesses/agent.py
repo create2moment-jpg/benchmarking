@@ -101,6 +101,7 @@ class AgentHarness:
                 trace.add("model_request", turn=result.turns, messages=len(request.messages))
                 response = self.provider.complete(request, ctx.cancel)
                 result.usage = result.usage + response.usage
+                result.model_time_s = (result.model_time_s or 0.0) + response.latency_s
                 trace.add(
                     "model_response",
                     turn=result.turns,

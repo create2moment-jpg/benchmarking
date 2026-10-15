@@ -377,6 +377,8 @@ class RunImporter:
                 status=AttemptStatus.COMPLETED.value,
                 failure_class=failure.value,
                 eval_wall_s=round(time.monotonic() - t0, 3),
+                eval_cpu_s=outcome.cpu_s,
+                eval_max_rss_mb=outcome.max_rss_mb,
                 score=None if card.score is None else round(card.score, 3),
                 coverage=round(card.coverage, 3),
                 passed=None if card.passed is None else int(card.passed),

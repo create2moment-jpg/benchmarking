@@ -32,7 +32,7 @@ from engineering_llm_bench.orchestration.runner import (
 )
 from engineering_llm_bench.redaction import Redactor
 from engineering_llm_bench.storage.artifacts import ArtifactStore, atomic_write_bytes
-from engineering_llm_bench.storage.db import SchemaVersionError, Store
+from engineering_llm_bench.storage.db import SchemaVersionError, Store, dumps
 
 app = typer.Typer(
     help="Benchmark local and paid LLMs / agent harnesses on reproducible engineering tasks.",
@@ -48,6 +48,33 @@ byok_app = typer.Typer(
 )
 app.add_typer(review_app, name="review")
 app.add_typer(byok_app, name="byok")
+perf_app = typer.Typer(
+    help="Model-server performance: endpoint discovery, server info, throughput calibration.",
+    no_args_is_help=True,
+)
+app.add_typer(perf_app, name="perf")
+
+EndpointOpt = Annotated[
+    str | None,
+    typer.Option(
+        help="Model server URL, e.g. http://localhost:11434 (Ollama) or http://host:8000/v1."
+    ),
+]
+ByokConfigOpt = Annotated[
+    Path | None,
+    typer.Option(help="BYOK / VS Code settings JSON to read the model endpoint from."),
+]
+ModelIdOpt = Annotated[
+    str | None,
+    typer.Option(help="Model id on the server (default: from config or the loaded one)."),
+]
+CalibrationRunsOpt = Annotated[
+    int, typer.Option(min=0, max=20, help="Calibration repetitions per prompt (0 = info only).")
+]
+AllowRemoteProbeOpt = Annotated[
+    bool,
+    typer.Option(help="Allow probing a non-local endpoint (sends the fixed calibration prompts)."),
+]
 
 EXIT_PROBLEMS, EXIT_CONFIG, EXIT_INTERRUPTED, EXIT_FAILED = 1, 2, 3, 4
 
@@ -457,6 +484,11 @@ def run(
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the extended-profile confirmation.")
     ] = False,
+    perf_probe: Annotated[
+        bool,
+        typer.Option(help="Also snapshot the model server before/after and calibrate tokens/s."),
+    ] = False,
+    calibration_runs: CalibrationRunsOpt = 3,
 ) -> None:
     """Run the benchmark for one model/harness and persist scored results."""
     ctx = load_ctx(config, models)
@@ -488,10 +520,39 @@ def run(
     if (profile == Profile.EXTENDED or plan.run.profile_cfg.warn_cost) and not yes:
         typer.confirm("Extended runs can take long and cost money. Continue?", abort=True)
     signal.signal(signal.SIGTERM, _raise_interrupt)
+    perf_base = plan.run.model.base_url if plan.run.model else None
+    perf_start = None
+    if perf_probe:
+        from engineering_llm_bench.perf.capture import snapshot  # noqa: PLC0415
+
+        if perf_base is None:
+            typer.secho("--perf-probe: this model has no base_url; skipped", fg=typer.colors.YELLOW)
+        else:
+            perf_start = snapshot(
+                perf_base,
+                plan.run.model.model_id if plan.run.model else None,
+                [],
+                0,
+                plan.run.remote and allow_remote,
+            )
     try:
         run_id = runner.run(req)
     except ConfigError as exc:
         raise _fail(str(exc)) from None
+    if perf_probe and perf_base is not None and plan.run.model is not None:
+        from engineering_llm_bench.perf.capture import assemble, snapshot  # noqa: PLC0415
+        from engineering_llm_bench.perf.probe import headline  # noqa: PLC0415
+
+        end = snapshot(
+            perf_base,
+            plan.run.model.model_id,
+            [],
+            calibration_runs,
+            plan.run.remote and allow_remote,
+        )
+        perf = assemble(perf_base, perf_start, end)
+        store.update_run(run_id, perf_json=dumps(perf))
+        _print_perf(headline(perf), end)
     run_row = store.get_run(run_id) or {}
     attempts = store.attempts_for_run(run_id)
     _table(
@@ -884,14 +945,29 @@ def byok_prepare(
     allow_inside_repo: Annotated[
         bool, typer.Option(help="Testing only: allow a session folder inside this repository.")
     ] = False,
+    endpoint: EndpointOpt = None,
+    byok_config: ByokConfigOpt = None,
+    model_id: ModelIdOpt = None,
+    allow_remote_probe: AllowRemoteProbeOpt = False,
     config: ConfigOpt = None,
     models: ModelsOpt = None,
 ) -> None:
-    """Create a session folder with starting_point.md and one folder per task for an IDE agent."""
+    """Create a session folder with starting_point.md and one folder per task for an IDE agent.
+
+    With --endpoint or --byok-config, the model server is also recorded and a "before"
+    snapshot (server info + token counters) is taken; nothing about it is written into the
+    session folder the agent sees."""
     from engineering_llm_bench.byok import prepare_session  # noqa: PLC0415
 
     ctx = load_ctx(config, models)
     target = (out or _default_session_dir()).expanduser()
+    if endpoint or byok_config:  # validate before creating anything
+        from engineering_llm_bench.perf.capture import resolve_endpoint  # noqa: PLC0415
+
+        try:
+            resolve_endpoint(endpoint, byok_config, model_id)
+        except ConfigError as exc:
+            raise _fail(str(exc)) from None
     try:
         session = prepare_session(
             ctx.registry,
@@ -909,10 +985,17 @@ def byok_prepare(
     )
     typer.echo(f"  folder:         {session.path}")
     typer.echo(f"  starting point: {session.starting_point}")
+    if endpoint or byok_config:
+        _record_session_endpoint(
+            ctx, session.session_id, endpoint, byok_config, model_id, allow_remote_probe, False
+        )
     typer.echo("Next steps:")
     typer.echo("  1. Open ONLY the session folder in VS Code (File > Open Folder), not this repo.")
     typer.echo("  2. In Copilot Chat choose Agent mode and your BYOK model, attach")
     typer.echo("     starting_point.md and say: 'Follow starting_point.md and complete all tasks.'")
+    typer.echo(
+        f'     (optional, right before you start the agent: bench byok mark-start "{session.path}")'
+    )
     typer.echo("  3. When it is done, collect and score the results:")
     typer.echo(f'     python byok/collect_results.py "{session.path}" --model-label "<your model>"')
 
@@ -946,10 +1029,19 @@ def byok_collect(
     report: Annotated[Path | None, typer.Option(help="Also write an HTML report here.")] = None,
     serve: Annotated[bool, typer.Option(help="Start the dashboard after collecting.")] = False,
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+    endpoint: EndpointOpt = None,
+    byok_config: ByokConfigOpt = None,
+    model_id: ModelIdOpt = None,
+    calibration_runs: CalibrationRunsOpt = 3,
+    allow_remote_probe: AllowRemoteProbeOpt = False,
     config: ConfigOpt = None,
     models: ModelsOpt = None,
 ) -> None:
-    """Validate an agent's session output, run the hidden evaluators and update the dashboard."""
+    """Validate an agent's session output, run the hidden evaluators and update the dashboard.
+
+    Also records performance: per-task time estimated from file timestamps and, when the model
+    endpoint is known (from `prepare`, --endpoint or --byok-config), server/model info, token
+    counters used during the session (vLLM / llama.cpp metrics) and a throughput calibration."""
     from engineering_llm_bench.byok import collect_session  # noqa: PLC0415
 
     ctx = load_ctx(config, models)
@@ -1005,6 +1097,9 @@ def byok_collect(
     passed = sum(1 for a in attempts if a["passed"] == 1)
     evaluated = sum(1 for a in attempts if a["passed"] is not None)
     typer.secho(f"passed {passed}/{evaluated} evaluated task(s)", fg=typer.colors.GREEN)
+    _collect_session_perf(
+        ctx, store, result, endpoint, byok_config, model_id, calibration_runs, allow_remote_probe
+    )
     if report is not None:
         from engineering_llm_bench.reporting import ReportOptions, build_report, to_html  # noqa: PLC0415
 
@@ -1017,6 +1112,248 @@ def byok_collect(
         serve_dashboard(store, ctx.artifacts(), ctx.redactor, "127.0.0.1", port)
     else:
         typer.echo("dashboard: `bench dashboard` (or refresh it if already running)")
+
+
+def _record_session_endpoint(
+    ctx: Ctx,
+    session_id: str,
+    endpoint: str | None,
+    byok_config: Path | None,
+    model_id: str | None,
+    allow_remote: bool,
+    mark_start: bool,
+) -> None:
+    from engineering_llm_bench.byok.session import (  # noqa: PLC0415
+        read_trusted_manifest,
+        update_trusted_manifest,
+    )
+    from engineering_llm_bench.perf.capture import resolve_endpoint, snapshot  # noqa: PLC0415
+
+    previous = (read_trusted_manifest(ctx.artifacts_dir, session_id) or {}).get("perf") or {}
+    try:
+        if endpoint or byok_config:
+            base, hints = resolve_endpoint(endpoint, byok_config, model_id)
+        elif previous.get("endpoint"):
+            base, hints = previous["endpoint"], previous.get("model_hints") or []
+        else:
+            raise ConfigError("no endpoint recorded; pass --endpoint or --byok-config")
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    start = snapshot(base, model_id or previous.get("model_id"), hints, 0, allow_remote)
+    perf = {
+        "endpoint": base,
+        "model_hints": hints,
+        "model_id": model_id or previous.get("model_id"),
+        "allow_remote": allow_remote,
+        "start": start,
+        "started_at_epoch": time.time() if mark_start else previous.get("started_at_epoch"),
+    }
+    try:
+        update_trusted_manifest(ctx.artifacts_dir, session_id, "perf", perf)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    if start.get("error"):
+        typer.secho(
+            f"  model server: {base} NOT reachable ({start['error']})", fg=typer.colors.YELLOW
+        )
+    else:
+        server = start.get("server") or {}
+        typer.echo(
+            f"  model server:   {base} ({server.get('server')} {server.get('version') or ''}), "
+            f"model {start.get('model') or 'unknown'}"
+            + (", token counters available" if server.get("counters") else "")
+        )
+
+
+def _collect_session_perf(
+    ctx: Ctx,
+    store: Store,
+    result: Any,
+    endpoint: str | None,
+    byok_config: Path | None,
+    model_id: str | None,
+    calibration_runs: int,
+    allow_remote: bool,
+) -> None:
+    from engineering_llm_bench.byok.session import (  # noqa: PLC0415
+        estimate_timing,
+        read_trusted_manifest,
+    )
+    from engineering_llm_bench.perf.capture import (  # noqa: PLC0415
+        assemble,
+        resolve_endpoint,
+        snapshot,
+    )
+    from engineering_llm_bench.perf.probe import headline  # noqa: PLC0415
+
+    recorded = (read_trusted_manifest(ctx.artifacts_dir, result.session_id) or {}).get("perf") or {}
+    timing = estimate_timing(result.submissions, recorded.get("started_at_epoch"))
+    base: str | None = None
+    hints: list[str] = []
+    if endpoint or byok_config:
+        try:
+            base, hints = resolve_endpoint(endpoint, byok_config, model_id)
+        except ConfigError as exc:
+            typer.secho(f"performance probe skipped: {exc}", fg=typer.colors.YELLOW)
+    elif recorded.get("endpoint"):
+        base, hints = recorded["endpoint"], recorded.get("model_hints") or []
+    end = None
+    if base is not None:
+        typer.echo(f"probing model server {base} (calibration runs: {calibration_runs})...")
+        end = snapshot(
+            base,
+            model_id or recorded.get("model_id"),
+            hints,
+            calibration_runs,
+            allow_remote or bool(recorded.get("allow_remote")),
+        )
+    perf = assemble(base or "", recorded.get("start"), end, timing)
+    store.update_run(result.run_id, perf_json=dumps(perf))
+    _print_perf(headline(perf), end)
+    if base is None:
+        typer.echo(
+            "(no model endpoint given: only time estimates recorded; use --endpoint or "
+            "--byok-config for server info, tokens/s and token counters)"
+        )
+
+
+def _print_perf(h: dict[str, Any], end: dict[str, Any] | None) -> None:
+    if end and end.get("error"):
+        typer.secho(f"model server probe failed: {end['error']}", fg=typer.colors.YELLOW)
+    rows = [
+        ("server", h.get("server"), h.get("server_version")),
+        ("model", h.get("model"), None),
+        ("quantization / params", h.get("quantization"), h.get("parameter_size")),
+        ("context length", h.get("context_length"), None),
+        ("share of model on GPU", h.get("gpu_fraction"), None),
+        ("generation tokens/s", h.get("gen_tps"), "calibration, short prompt"),
+        ("prompt tokens/s", h.get("prompt_tps"), "calibration, long prompt"),
+        ("time to first token s", h.get("ttft_s"), None),
+        ("cold load s", h.get("cold_load_s"), None),
+        (
+            "GPU / peak util % / peak MB",
+            h.get("gpu"),
+            f"{h.get('gpu_util_peak_pct')} / {h.get('gpu_mem_peak_mb')}",
+        ),
+        ("session token counters", h.get("session_tokens"), None),
+        ("session span s (estimate)", h.get("session_span_s"), "file timestamps"),
+    ]
+    typer.echo("performance (secondary to task outcomes):")
+    for label, value, extra in rows:
+        shown = "unknown" if value is None else value
+        typer.echo(
+            f"  {label:<28} {shown}" + (f"  ({extra})" if extra and value is not None else "")
+        )
+
+
+@byok_app.command("mark-start")
+def byok_mark_start(
+    session_dir: Annotated[Path, typer.Argument(help="Session folder created by `byok prepare`.")],
+    endpoint: EndpointOpt = None,
+    byok_config: ByokConfigOpt = None,
+    model_id: ModelIdOpt = None,
+    allow_remote_probe: AllowRemoteProbeOpt = False,
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Run right before handing starting_point.md to the agent: records the start time (for
+    per-task time estimates) and a fresh "before" snapshot of the model server's counters."""
+    from engineering_llm_bench.byok.session import read_session_id  # noqa: PLC0415
+
+    ctx = load_ctx(config, models, need_tasks=False)
+    try:
+        session_id = read_session_id(session_dir.expanduser())
+    except (ConfigError, OSError, ValueError) as exc:
+        raise _fail(f"not a BYOK session: {exc}") from None
+    from engineering_llm_bench.byok.session import (  # noqa: PLC0415
+        read_trusted_manifest,
+        update_trusted_manifest,
+    )
+
+    recorded = (read_trusted_manifest(ctx.artifacts_dir, session_id) or {}).get("perf") or {}
+    if endpoint or byok_config or recorded.get("endpoint"):
+        _record_session_endpoint(
+            ctx, session_id, endpoint, byok_config, model_id, allow_remote_probe, True
+        )
+    else:
+        try:
+            update_trusted_manifest(
+                ctx.artifacts_dir, session_id, "perf", {"started_at_epoch": time.time()}
+            )
+        except ConfigError as exc:
+            raise _fail(str(exc)) from None
+    typer.secho(f"session {session_id}: start recorded", fg=typer.colors.GREEN)
+
+
+@perf_app.command("discover")
+def perf_discover(
+    byok_config: ByokConfigOpt = None,
+) -> None:
+    """List model endpoints found in a BYOK / VS Code settings file (or common locations)."""
+    from engineering_llm_bench.perf.capture import (  # noqa: PLC0415
+        discover_from_file,
+        vscode_settings_candidates,
+    )
+
+    files = [byok_config] if byok_config else vscode_settings_candidates()
+    if not files:
+        raise _fail("no settings file found; pass --byok-config PATH")
+    for path in files:
+        try:
+            found = discover_from_file(path)
+        except ConfigError as exc:
+            typer.secho(str(exc), fg=typer.colors.YELLOW)
+            continue
+        typer.echo(f"{path}:")
+        if not found:
+            typer.echo("  (no http(s) endpoints)")
+        for c in found:
+            typer.echo(f"  {c.base_url:<32} at {c.json_path}  models: {c.model_ids or '-'}")
+
+
+@perf_app.command("probe")
+def perf_probe(
+    endpoint: EndpointOpt = None,
+    byok_config: ByokConfigOpt = None,
+    model_id: ModelIdOpt = None,
+    calibration_runs: CalibrationRunsOpt = 3,
+    max_tokens: Annotated[int, typer.Option(min=16, max=4096)] = 200,
+    allow_remote_probe: AllowRemoteProbeOpt = False,
+    out: Annotated[Path | None, typer.Option(help="Write the full probe JSON here.")] = None,
+    attach_run: Annotated[
+        str | None, typer.Option(help="Store the result as this run's performance record.")
+    ] = None,
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """Query a model server directly: model details, GPU share, tokens/s, time to first token."""
+    from engineering_llm_bench.perf.capture import (  # noqa: PLC0415
+        assemble,
+        resolve_endpoint,
+        snapshot,
+    )
+    from engineering_llm_bench.perf.probe import headline  # noqa: PLC0415
+
+    try:
+        base, hints = resolve_endpoint(endpoint, byok_config, model_id)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    report = snapshot(base, model_id, hints, calibration_runs, allow_remote_probe, max_tokens)
+    if report.get("error"):
+        raise _fail(f"probe failed: {report['error']}", EXIT_PROBLEMS)
+    _print_perf(headline(report), report)
+    if report.get("calibration_error"):
+        typer.secho(report["calibration_error"], fg=typer.colors.YELLOW)
+    if out is not None:
+        atomic_write_bytes(out, json.dumps(report, indent=2, default=str).encode())
+        typer.echo(f"wrote {out}")
+    if attach_run:
+        ctx = load_ctx(config, models, need_tasks=False)
+        store = ctx.store()
+        if store.get_run(attach_run) is None:
+            raise _fail(f"unknown run id {attach_run}")
+        store.update_run(attach_run, perf_json=dumps(assemble(base, None, report)))
+        typer.echo(f"attached to run {attach_run}")
 
 
 def main() -> None:

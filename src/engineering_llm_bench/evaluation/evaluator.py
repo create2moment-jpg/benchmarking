@@ -23,6 +23,8 @@ class EvaluationOutcome:
     checks: list[CheckResult]
     scorecard: ScoreCard
     eval_dir: Path
+    cpu_s: float | None = None
+    max_rss_mb: float | None = None
 
 
 def evaluator_allowlist(task: Task, global_allowlist: list[str]) -> set[str]:
@@ -59,4 +61,4 @@ def evaluate(
     card = score_attempt(
         task, results, weights, workflow_score(harness, mode, task, eval_dir), changed
     )
-    return EvaluationOutcome(results, card, eval_dir)
+    return EvaluationOutcome(results, card, eval_dir, round(ctx.cpu_s, 3), ctx.max_rss_mb or None)

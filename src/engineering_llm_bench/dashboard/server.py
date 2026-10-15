@@ -14,6 +14,7 @@ from importlib import resources
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from engineering_llm_bench.perf.probe import headline
 from engineering_llm_bench.redaction import Redactor
 from engineering_llm_bench.reporting.export import ReportOptions, build_report
 from engineering_llm_bench.storage.artifacts import ArtifactStore
@@ -64,6 +65,8 @@ class DashboardApi:
             "artifacts": self.store.artifacts(attempt_id),
             "reviews": self.store.reviews(attempt_id),
             "notes": _loads(a.get("notes_json")) or [],
+            "performance": _loads(run.get("perf_json")),
+            "performance_headline": headline(_loads(run.get("perf_json"))) or None,
         }
         redacted: dict[str, Any] = self.redactor.obj(detail)
         return redacted

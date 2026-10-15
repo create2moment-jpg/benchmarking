@@ -50,6 +50,7 @@ class DirectHarness:
             result.failure_class, result.error = _provider_failure(exc), f"{exc.kind}: {exc}"
             return result
         result.usage = response.usage
+        result.model_time_s = response.latency_s
         result.trace.add(
             "model_response",
             text=response.text,

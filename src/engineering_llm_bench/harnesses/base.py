@@ -56,6 +56,8 @@ class HarnessResult:
     malformed_outputs: int = 0
     usage: Usage = field(default_factory=Usage)
     usage_reliable: bool = False
+    #: Seconds spent waiting for model responses (None when the harness cannot observe it).
+    model_time_s: float | None = 0.0
     trace: Trace = field(default_factory=Trace)
 
 

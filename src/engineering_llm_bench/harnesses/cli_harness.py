@@ -44,7 +44,7 @@ class CliHarness:
         return self.config.version
 
     def run(self, ctx: HarnessContext) -> HarnessResult:
-        result = HarnessResult(usage_reliable=False, turns=1)
+        result = HarnessResult(usage_reliable=False, turns=1, model_time_s=None)
         prompt = prompts.external_prompt(ctx.task)
         prompt_file = ctx.workspace.scratch / "prompt.md"
         prompt_file.write_text(prompt, encoding="utf-8")

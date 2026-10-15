@@ -34,7 +34,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import IO
+from typing import IO, Any
 
 from engineering_llm_bench.config.models import LimitsConfig
 from engineering_llm_bench.control import CancelToken
@@ -58,6 +58,9 @@ class CommandResult:
     timed_out: bool = False
     cancelled: bool = False
     truncated: bool = False
+    #: Compute profile of the process tree (from wait4 rusage); None when unavailable.
+    cpu_s: float | None = None
+    max_rss_mb: float | None = None
 
     @property
     def ok(self) -> bool:
@@ -402,7 +405,11 @@ class CommandRunner:
                     proc.stdin.close()
                 except OSError:
                     pass
-            while proc.poll() is None:
+            reaped: tuple[int, float | None, float | None] | None = None
+            while reaped is None:
+                reaped = _try_reap(proc)
+                if reaped is not None:
+                    break
                 if time.monotonic() - start > timeout:
                     timed_out = True
                     break
@@ -410,9 +417,10 @@ class CommandRunner:
                     cancelled = True
                     break
                 time.sleep(_POLL_S)
-            if timed_out or cancelled:
+            if reaped is None:
                 _kill_group(proc)
-            exit_code = proc.wait()
+                reaped = _wait_with_rusage(proc)
+            exit_code, cpu_s, max_rss_mb = reaped
             stdout, t1 = _read_capped(out_f, self.limits.max_output_bytes)
             stderr, t2 = _read_capped(err_f, self.limits.max_output_bytes)
         return CommandResult(
@@ -424,7 +432,41 @@ class CommandRunner:
             timed_out=timed_out,
             cancelled=cancelled,
             truncated=t1 or t2,
+            cpu_s=cpu_s,
+            max_rss_mb=max_rss_mb,
         )
+
+
+def _rusage_result(
+    proc: subprocess.Popen[bytes], status: int, usage: Any
+) -> tuple[int, float, float]:
+    code = os.waitstatus_to_exitcode(status)
+    proc.returncode = code
+    rss_kb = usage.ru_maxrss / 1024 if sys.platform == "darwin" else usage.ru_maxrss
+    return code, round(usage.ru_utime + usage.ru_stime, 3), round(rss_kb / 1024, 1)
+
+
+def _try_reap(proc: subprocess.Popen[bytes]) -> tuple[int, float | None, float | None] | None:
+    """Non-blocking reap. Uses ``wait4`` (captures CPU time and peak RSS of the process and the
+    descendants it waited for) where available, ``Popen.poll`` elsewhere."""
+    if not hasattr(os, "wait4"):
+        code = proc.poll()
+        return None if code is None else (code, None, None)
+    try:
+        pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
+    except ChildProcessError:
+        return proc.wait(), None, None
+    return None if pid == 0 else _rusage_result(proc, status, usage)
+
+
+def _wait_with_rusage(proc: subprocess.Popen[bytes]) -> tuple[int, float | None, float | None]:
+    if not hasattr(os, "wait4"):
+        return proc.wait(), None, None
+    try:
+        _, status, usage = os.wait4(proc.pid, 0)
+    except ChildProcessError:
+        return proc.wait(), None, None
+    return _rusage_result(proc, status, usage)
 
 
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:

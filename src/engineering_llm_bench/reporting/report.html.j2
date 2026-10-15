@@ -83,6 +83,18 @@ ul { margin:4px 0; padding-left:20px; }
 {% for d in dimensions %}{% set s = g.dimensions.get(d) %}<td class="num">{% if s %}{{ s.mean|fmt(2) }} <span class="muted">n={{ s.n }}</span>{% else %}-{% endif %}</td>{% endfor %}</tr>{% endfor %}
 </table></div>
 
+<h2>Model server, throughput and time profile <span class="muted">(secondary)</span></h2>
+<div class="table-wrap"><table>
+<tr><th>Model | harness</th><th>Server</th><th>Quant / params</th><th class="num">Context</th><th class="num">GPU share</th><th class="num">Gen tok/s</th><th class="num">Prompt tok/s</th><th class="num">TTFT s</th><th class="num">Cold load s</th><th>Session tokens</th><th class="num">Agent out tok/s</th><th class="num">Model s p50</th><th class="num">Tools s p50</th><th class="num">Eval s p50</th><th class="num">Eval CPU s p50</th><th class="num">Eval peak MB</th></tr>
+{% for key, g in r.groups.items() %}{% set p = g.server_perf or {} %}{% set t = g.time_profile or {} %}{% set c = g.compute or {} %}
+<tr><td>{{ key }}</td><td>{{ p.server or "unknown" }} {{ p.server_version or "" }}</td><td>{{ p.quantization or "?" }} / {{ p.parameter_size or "?" }}</td>
+<td class="num">{{ p.context_length|fmt(0) }}</td><td class="num">{{ p.gpu_fraction|fmt(pct=True) }}</td><td class="num">{{ p.gen_tps|fmt }}</td><td class="num">{{ p.prompt_tps|fmt(0) }}</td>
+<td class="num">{{ p.ttft_s|fmt(2) }}</td><td class="num">{{ p.cold_load_s|fmt(2) }}</td><td>{{ p.session_tokens|tokens }}</td><td class="num">{{ t.e2e_output_tps_median|fmt }}</td>
+<td class="num">{{ t.model_s_median|fmt }}</td><td class="num">{{ t.tools_and_overhead_s_median|fmt }}</td><td class="num">{{ t.eval_s_median|fmt }}</td><td class="num">{{ c.eval_cpu_s_median|fmt(2) }}</td><td class="num">{{ c.eval_max_rss_mb_peak|fmt(0) }}</td></tr>
+{% endfor %}
+</table></div>
+<div class="muted">"-" = not measured. Server columns come from probing the model endpoint with fixed calibration prompts; agent/eval columns from the benchmark's own attempts.</div>
+
 <h2>Per-task results (mean score, passed/evaluated)</h2>
 <div class="table-wrap"><table>
 <tr><th>Task</th>{% for key in r.groups %}<th class="num">{{ key }}</th>{% endfor %}</tr>

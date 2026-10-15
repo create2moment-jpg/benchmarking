@@ -583,6 +583,9 @@ class BenchmarkRunner:
             .relative_to(self.artifacts.root)
             .as_posix(),
             "notes_json": dumps(notes),
+            "model_time_s": None if result.model_time_s is None else round(result.model_time_s, 3),
+            "eval_cpu_s": outcome.cpu_s if outcome else None,
+            "eval_max_rss_mb": outcome.max_rss_mb if outcome else None,
         }
         self.store.save_evaluation(
             attempt_row,

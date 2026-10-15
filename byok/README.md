@@ -18,9 +18,18 @@ task text whichever model you benchmark.
 
 ```bash
 pip install -e ".[dev]"            # once; the scripts also work without installing
-python byok/prepare_session.py --profile standard --out ~/elb-byok-sessions/qwen38-run1
+python byok/prepare_session.py --profile standard --out ~/elb-byok-sessions/qwen38-run1 \
+    --byok-config ~/.config/Code/User/settings.json      # where your BYOK endpoint is configured
+# or: --endpoint http://localhost:11434 (Ollama) / http://localhost:8000/v1 (vLLM, llama.cpp)
 # or: --profile smoke (4 tasks), --task python.fix-interval-merge,sql.sensor-gaps
 ```
+
+`--byok-config` reads the JSON (comments allowed) where Copilot's BYOK endpoint is configured
+and finds the model server's URL and model ids; `bench perf discover --byok-config FILE` shows
+what it found. If several endpoints are configured, pick one with `--endpoint` / `--model-id`.
+The endpoint is stored with the benchmark's private session record, **not** in the session folder
+the agent sees. Endpoint options are optional: without them you still get task scores and
+time estimates, just no server statistics.
 
 This creates (outside the repository, so the agent cannot read hidden tests or reference
 solutions):
@@ -37,6 +46,13 @@ See [starting_point.example.md](starting_point.example.md) for what the agent re
 (standard profile).
 
 ## 2. Let the agent work (in VS Code)
+
+Right before you hand over `starting_point.md`, record the start (start time for per-task time
+estimates, and a fresh "before" snapshot of the server's token counters):
+
+```bash
+bench byok mark-start ~/elb-byok-sessions/qwen38-run1
+```
 
 1. **File > Open Folder…** and open the *session folder* (not this repository).
 2. Open Copilot Chat, switch to **Agent** mode, and select your BYOK model in the model picker
@@ -83,6 +99,28 @@ What the collector does:
 Each new benchmark of a model (or of a different model) needs a **fresh session**: run
 `prepare_session.py` again with a new `--out` folder.
 
+## Performance statistics (secondary to task outcomes)
+
+Copilot does not expose token usage, so the collector measures the **model server** directly
+(only GET requests plus a fixed calibration prompt set; never your code):
+
+| Statistic | Source | Ollama | vLLM | llama.cpp |
+|---|---|---|---|---|
+| model, quantization, parameter count, context length | `/api/show`, `/api/tags`, `/v1/models`, `/props` | yes | id, max len | ctx |
+| share of the model resident on GPU | `/api/ps` (`size_vram / size`) | yes | - | - |
+| generation tokens/s, prompt tokens/s, cold load time | calibration; Ollama reports server-side ns timings | server-side | client-timed | client-timed |
+| time to first token | calibration (streaming) | yes | yes | yes |
+| **tokens used during the session** | `/metrics` counters, before vs after (calibration excluded) | not available | yes | with `--metrics` |
+| GPU utilisation / memory peak | `nvidia-smi` sampled during calibration (local server) | if available | if available | if available |
+| per-task active time | file modification times of each task's edits and RESULT.md | estimate | estimate | estimate |
+
+Calibration runs with `--calibration-runs N` (default 3, `0` = server info only) when you
+collect, after the agent is done, so it never competes with the session. Everything not
+measured is shown as "unknown" - nothing is estimated except the clearly labelled time estimates.
+Results appear in the dashboard's **Compare** tab ("Model server, throughput and time profile")
+and in each attempt's detail view. Probe any endpoint on its own with
+`bench perf probe --endpoint URL [--model-id M] [--out probe.json]`.
+
 ## Comparing models
 
 Run one session per model (same profile), collect each with its own `--model-label`, then use
@@ -96,8 +134,11 @@ bench report --format html --out reports/byok.html
 
 ## Notes and limitations
 
-* Token usage and cost are not visible to this tool through Copilot; they are stored as
-  unknown. Per-task time is unknown; `--session-minutes` records the whole session.
+* Copilot does not expose usage; session token counts come from the server's `/metrics`
+  (vLLM, llama.cpp) and are unknown for Ollama. Counters include any other traffic the server
+  handled during the session. Per-task times are estimates from file timestamps;
+  `--session-minutes` records your own measurement of the whole session.
+* Calibration tokens/s measures the server under a fixed load, not every Copilot request.
 * Copilot's own system prompt, context management and tool behaviour are part of what you
   measure. Results are a **model + Copilot harness** combination; compare them with other
   models through the same harness.

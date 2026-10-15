@@ -19,4 +19,4 @@ The package is organised by responsibility:
 __version__ = "0.1.0"
 
 #: Version of the persisted data contracts (DB schema + export format).
-DATA_SCHEMA_VERSION = 1
+DATA_SCHEMA_VERSION = 2

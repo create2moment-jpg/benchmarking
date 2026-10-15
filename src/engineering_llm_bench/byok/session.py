@@ -87,6 +87,11 @@ class TaskSubmission:
     rejected: list[str] = field(default_factory=list)  # non-editable text files changed
     ignored: list[str] = field(default_factory=list)  # generated/binary/oversized files
     notes: list[str] = field(default_factory=list)
+    #: File modification times (epoch s) used for time estimates: first/last changed editable
+    #: file and RESULT.md.
+    first_change_ts: float | None = None
+    last_change_ts: float | None = None
+    result_ts: float | None = None
 
     @property
     def attempted(self) -> bool:
@@ -258,6 +263,7 @@ def inspect_submission(task: Task, session_dir: Path, folder: str) -> TaskSubmis
         return sub
     baseline = snapshot(task.fixture_dir)
     current: dict[str, bytes] = {}
+    mtimes: dict[str, float] = {}
     for path in iter_files(root):
         rel = path.relative_to(root).as_posix()
         if rel in AGENT_FILES:
@@ -266,6 +272,7 @@ def inspect_submission(task: Task, session_dir: Path, folder: str) -> TaskSubmis
             sub.ignored.append(f"{rel} (larger than {MAX_SUBMITTED_FILE} bytes)")
             continue
         current[rel] = path.read_bytes()
+        mtimes[rel] = path.stat().st_mtime
     for rel in sorted(set(baseline) | set(current)):
         before, after = baseline.get(rel), current.get(rel)
         if before == after:
@@ -283,8 +290,12 @@ def inspect_submission(task: Task, session_dir: Path, folder: str) -> TaskSubmis
         or task_md.read_text(encoding="utf-8", errors="replace") != expected_md
     ):
         sub.notes.append("TASK.md was modified or deleted (the original contract was used)")
+    changed_times = [mtimes[r] for r, d in sub.overlay.items() if d is not None and r in mtimes]
+    if changed_times:
+        sub.first_change_ts, sub.last_change_ts = min(changed_times), max(changed_times)
     result = root / "RESULT.md"
     if result.is_file():
+        sub.result_ts = result.stat().st_mtime
         text = result.read_text(encoding="utf-8", errors="replace")[:MAX_RESULT_CHARS]
         sub.result_md = text
         match = _STATUS_RE.search(text)
@@ -416,3 +427,62 @@ def _build_attempts(
             )
         )
     return attempts, overlays
+
+
+def trusted_manifest_path(artifacts_dir: Path, session_id: str) -> Path:
+    return artifacts_dir / "byok_sessions" / f"{session_id}.json"
+
+
+def read_session_id(session_dir: Path) -> str:
+    data = json.loads((session_dir / ".bench" / "session.json").read_text(encoding="utf-8"))
+    session_id = str(data.get("session_id", ""))
+    if not re.fullmatch(r"[0-9A-Za-z_.-]{6,80}", session_id):
+        raise ConfigError("session manifest has an invalid session_id")
+    return session_id
+
+
+def update_trusted_manifest(artifacts_dir: Path, session_id: str, key: str, value: Any) -> None:
+    path = trusted_manifest_path(artifacts_dir, session_id)
+    if not path.is_file():
+        raise ConfigError(f"trusted manifest for {session_id} not found in {path.parent}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data[key] = value
+    atomic_write_bytes(path, json.dumps(data, indent=2).encode())
+
+
+def read_trusted_manifest(artifacts_dir: Path, session_id: str) -> dict[str, Any] | None:
+    path = trusted_manifest_path(artifacts_dir, session_id)
+    if not path.is_file():
+        return None
+    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return data
+
+
+def estimate_timing(submissions: list[TaskSubmission], started_at: float | None) -> dict[str, Any]:
+    """Per-task active time estimated from file modification times (tasks are done in order).
+
+    A task's end is its RESULT.md (else its last edit); its start is the previous task's end, or
+    the recorded session start / its own first edit for the first task. These are ESTIMATES and
+    are reported separately from measured wall times.
+    """
+    tasks = []
+    prev_end = started_at
+    ends: list[float] = []
+    for sub in submissions:
+        end = sub.result_ts or sub.last_change_ts
+        start = prev_end if prev_end is not None else sub.first_change_ts
+        estimate = round(end - start, 1) if end and start and end >= start else None
+        tasks.append({"task_id": sub.task_id, "estimated_s": estimate})
+        if end:
+            ends.append(end)
+            prev_end = end
+    first = started_at or min(
+        (s.first_change_ts for s in submissions if s.first_change_ts), default=None
+    )
+    span = round(max(ends) - first, 1) if ends and first and max(ends) >= first else None
+    return {
+        "method": "file modification times (estimate)",
+        "session_started_at_epoch": started_at,
+        "observed_span_s": span,
+        "tasks": tasks,
+    }

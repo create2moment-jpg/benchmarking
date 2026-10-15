@@ -17,6 +17,7 @@ from jinja2 import Environment, select_autoescape
 
 from engineering_llm_bench import DATA_SCHEMA_VERSION, __version__
 from engineering_llm_bench.domain import Dimension
+from engineering_llm_bench.perf.probe import headline
 from engineering_llm_bench.redaction import Redactor
 from engineering_llm_bench.reporting.stats import (
     comparability,
@@ -28,7 +29,13 @@ from engineering_llm_bench.reporting.stats import (
 from engineering_llm_bench.storage.artifacts import ArtifactStore
 from engineering_llm_bench.storage.db import Store, utcnow
 
-_RUN_FIELDS_DROP = {"env_json", "model_config_json", "harness_config_json", "run_config_json"}
+_RUN_FIELDS_DROP = {
+    "env_json",
+    "model_config_json",
+    "harness_config_json",
+    "run_config_json",
+    "perf_json",
+}
 
 
 @dataclass
@@ -104,6 +111,12 @@ def build_report(
         summary["model_alias"], summary["harness"] = rows[0]["model_alias"], rows[0]["harness"]
         summary["provider"] = rows[0]["provider"]
         summary["mode"] = rows[0]["mode"]
+        perf_runs = [
+            r for r in runs if r["id"] in {a["run_id"] for a in rows} and r.get("perf_json")
+        ]
+        summary["server_perf"] = (
+            headline(_json_field(perf_runs[0]["perf_json"])) if perf_runs else None
+        )
         group_out[key] = summary
     matrix: dict[str, dict[str, dict[str, Any]]] = {}
     for a in joined:
@@ -136,6 +149,7 @@ def build_report(
                 "model_config": _json_field(r["model_config_json"]),
                 "harness_config": _json_field(r["harness_config_json"]),
                 "run_config": _json_field(r["run_config_json"]),
+                "performance": _json_field(r.get("perf_json")),
             }
             for r in runs
         ],
@@ -209,9 +223,21 @@ def _fmt(value: Any, digits: int = 1, pct: bool = False) -> str:
     return str(value)
 
 
+def _tokens(delta: Any) -> str:
+    """Render a counter delta as 'N in / M out' (unknown when not measured)."""
+    if not isinstance(delta, dict) or not delta:
+        return "unknown"
+    prompt = sum(v for k, v in delta.items() if "prompt_tokens" in k)
+    gen = sum(
+        v for k, v in delta.items() if "generation_tokens" in k or "tokens_predicted_total" in k
+    )
+    return f"{prompt:.0f} in / {gen:.0f} out"
+
+
 def to_html(report: dict[str, Any]) -> str:
     env = Environment(autoescape=select_autoescape(default=True, default_for_string=True))
     env.filters["fmt"] = _fmt
+    env.filters["tokens"] = _tokens
     template_text = (
         resources.files("engineering_llm_bench.reporting")
         .joinpath("report.html.j2")

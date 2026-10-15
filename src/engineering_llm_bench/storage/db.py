@@ -140,6 +140,13 @@ MIGRATIONS: dict[int, str] = {
         UNIQUE (attempt_id, dimension, reviewer)
     );
     """,
+    # v2: model-server performance (endpoint info, throughput calibration, counters, timing).
+    2: """
+    ALTER TABLE runs ADD COLUMN perf_json TEXT;
+    ALTER TABLE attempts ADD COLUMN model_time_s REAL;
+    ALTER TABLE attempts ADD COLUMN eval_cpu_s REAL;
+    ALTER TABLE attempts ADD COLUMN eval_max_rss_mb REAL;
+    """,
 }
 
 ATTEMPT_COLUMNS = (
@@ -176,6 +183,9 @@ ATTEMPT_COLUMNS = (
     "final_hash",
     "artifact_dir",
     "notes_json",
+    "model_time_s",
+    "eval_cpu_s",
+    "eval_max_rss_mb",
 )
 
 

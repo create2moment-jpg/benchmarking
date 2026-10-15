@@ -213,6 +213,7 @@ function renderCompare() {
   setTable($("compare-dims"), ["Model | harness", ...DIMENSIONS.map((d) => ({ label: d, num: true }))],
     groups.map(([k, s]) => el("tr", {}, td(k), ...DIMENSIONS.map((d) => num(s.dims[d].n ? `${fmt(s.dims[d].mean, 2)} (n=${s.dims[d].n})` : "unassessed")))));
 
+  renderPerf(groups.map(([k]) => k));
   const tasks = [...new Set(attempts.map((a) => a.task_id))].sort();
   setTable($("compare-tasks"), ["Task", ...groups.map(([k]) => ({ label: k, num: true }))],
     tasks.map((t) => el("tr", {}, td(t), ...groups.map(([k]) => {
@@ -222,6 +223,32 @@ function renderCompare() {
       if (s.scoreN === 0) return num(el("span", { class: "muted" }, [...new Set(cell.map((a) => a.status))].join(",")));
       return num(el("span", {}, `${fmt(s.scoreMean, 0)} `, el("span", { class: s.passed === s.passN ? "pass" : "fail" }, `${s.passed}/${s.passN}`)));
     }))));
+}
+
+// ------------------------------------------------------------------ performance
+function sessionTokens(delta) {
+  if (!delta) return "unknown";
+  const pick = (re) => Object.entries(delta).filter(([k]) => re.test(k)).reduce((s, [, v]) => s + v, 0);
+  const p = pick(/prompt_tokens/), g = pick(/generation_tokens|tokens_predicted_total/);
+  return `${Math.round(p)} in / ${Math.round(g)} out`;
+}
+function renderPerf(keys) {
+  const groups = state.report.groups || {};
+  const u = (v, d = 1) => (v === null || v === undefined ? "unknown" : typeof v === "number" ? fmt(v, d) : String(v));
+  setTable($("compare-perf"),
+    ["Model | harness", "Server", "Quant / params", { label: "Context", num: true }, { label: "GPU share", num: true },
+      { label: "Gen tok/s", num: true }, { label: "Prompt tok/s", num: true }, { label: "TTFT s", num: true }, { label: "Cold load s", num: true },
+      "Session tokens", { label: "Agent out tok/s", num: true }, { label: "Model s p50", num: true }, { label: "Tools s p50", num: true },
+      { label: "Eval s p50", num: true }, { label: "Eval CPU s p50", num: true }, { label: "Eval peak MB", num: true }],
+    keys.filter((k) => groups[k]).map((k) => {
+      const g = groups[k], p = g.server_perf || {}, t = g.time_profile || {}, c = g.compute || {};
+      return el("tr", {}, td(k), td(p.server ? `${p.server} ${p.server_version || ""}` : "unknown"),
+        td(p.quantization || p.parameter_size ? `${p.quantization || "?"} / ${p.parameter_size || "?"}` : "unknown"),
+        num(u(p.context_length, 0)), num(p.gpu_fraction === null || p.gpu_fraction === undefined ? "unknown" : pct(p.gpu_fraction)),
+        num(u(p.gen_tps)), num(u(p.prompt_tps, 0)), num(u(p.ttft_s, 2)), num(u(p.cold_load_s, 2)),
+        td(sessionTokens(p.session_tokens)), num(u(t.e2e_output_tps_median)), num(u(t.model_s_median)),
+        num(u(t.tools_and_overhead_s_median)), num(u(t.eval_s_median)), num(u(c.eval_cpu_s_median, 2)), num(u(c.eval_max_rss_mb_peak, 0)));
+    }));
 }
 
 // ------------------------------------------------------------------ history
@@ -319,6 +346,10 @@ async function openAttempt(id) {
         ["Agent wall", `${fmt(a.agent_wall_s)} s`], ["Eval wall", `${fmt(a.eval_wall_s)} s`],
         ["Turns / tools ok", `${unknown(a.turns)} / ${unknown(a.tool_calls_ok)} of ${unknown(a.tool_calls)}`],
         ["Malformed outputs", unknown(a.malformed_outputs)], ["Tokens", tokens],
+        ["Model time", a.model_time_s === null ? "unknown" : `${fmt(a.model_time_s)} s`],
+        ["Agent out tok/s", a.model_time_s && a.output_tokens ? fmt(a.output_tokens / a.model_time_s) : "unknown"],
+        ["Eval CPU / peak RSS", a.eval_cpu_s === null ? "unknown" : `${fmt(a.eval_cpu_s, 2)} s / ${unknown(a.eval_max_rss_mb)} MB`],
+        ["Est. active time", (() => { const t = (d.performance?.timing?.tasks || []).find((x) => x.task_id === a.task_id); return t && t.estimated_s !== null ? `${fmt(t.estimated_s)} s (file timestamps)` : "unknown"; })()],
         ["Cost", a.cost_usd === null ? "unknown" : `$${a.cost_usd.toFixed(5)}`],
       ])),
       el("div", { class: "card" }, el("h3", {}, "Configuration"), kv([
@@ -360,6 +391,8 @@ async function openAttempt(id) {
       return t;
     })()) : "",
     d.notes.length ? el("div", {}, el("h3", {}, "Notes"), el("ul", {}, d.notes.map((n) => el("li", {}, n)))) : "",
+    el("h3", {}, "Model server performance (run level)"),
+    el("pre", {}, d.performance ? JSON.stringify(d.performance_headline || d.performance, null, 2) : "not recorded for this run"),
     el("h3", {}, "Environment"), el("pre", {}, d.environment ? JSON.stringify(d.environment, null, 2) : "unknown"),
     el("h3", {}, "Model / harness / run config"),
     el("pre", {}, JSON.stringify({ model: d.model_config, harness: d.harness_config, run: d.run_config }, null, 2)),
