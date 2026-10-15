@@ -11,6 +11,7 @@ import json
 import os
 import signal
 import sys
+import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -987,7 +988,7 @@ def byok_prepare(
     With --endpoint or --byok-config, the model server is also recorded and a "before"
     snapshot (server info + token counters) is taken; nothing about it is written into the
     session folder the agent sees."""
-    from engineering_llm_bench.byok import prepare_session  # noqa: PLC0415
+    from engineering_llm_bench.byok import agent_prompt, prepare_session  # noqa: PLC0415
 
     ctx = load_ctx(config, models)
     target = (out or _default_session_dir()).expanduser()
@@ -1030,7 +1031,10 @@ def byok_prepare(
     typer.echo("Next steps:")
     typer.echo("  1. Open ONLY the session folder in VS Code (File > Open Folder), not this repo.")
     typer.echo("  2. In Copilot Chat choose Agent mode and your BYOK model, attach")
-    typer.echo("     starting_point.md and say: 'Follow starting_point.md and complete all tasks.'")
+    typer.echo("     starting_point.md and send this prompt (also in instructions/command.md):")
+    typer.echo("")
+    typer.echo(textwrap.indent(textwrap.fill(agent_prompt(), 92), "     "))
+    typer.echo("")
     typer.echo(
         f'     (optional, right before you start the agent: bench byok mark-start "{session.path}")'
     )

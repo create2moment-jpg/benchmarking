@@ -157,6 +157,19 @@ def test_byok_scripts_via_cli(
     res = runner.invoke(app, ["byok", "prepare", "--out", str(out), "--task", TASKS[0]])
     assert res.exit_code == 0, res.output
     assert "starting_point.md" in res.output
+    assert "ALL TASKS COMPLETE" in res.output  # the prompt to send is printed
     res = runner.invoke(app, ["byok", "collect", str(out), "--model-label", "qwen-3.8"])
     assert res.exit_code == 0, res.output
     assert "passed 0/1" in res.output
+
+
+def test_agent_prompt_matches_instructions_folder() -> None:
+    from engineering_llm_bench.byok import agent_prompt  # noqa: PLC0415
+
+    packaged = (REPO / "src/engineering_llm_bench/byok/command.md").read_text()
+    assert (REPO / "instructions/command.md").read_text() == packaged
+    prompt = agent_prompt()
+    assert "starting_point.md" in prompt and "ALL TASKS COMPLETE" in prompt
+    assert "\n" not in prompt
+    for word in ("ollama", "qwen", "vllm"):
+        assert word not in prompt.lower()

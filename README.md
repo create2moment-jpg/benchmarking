@@ -24,7 +24,8 @@ If your model is driven by GitHub Copilot agent mode (BYOK), see **[byok/README.
 
 ```bash
 python byok/prepare_session.py --profile standard --out ~/elb-byok-sessions/qwen38-run1
-#   -> open that folder in VS Code, give starting_point.md to Copilot agent mode
+#   -> open that folder in VS Code, attach starting_point.md in Copilot agent mode and send
+#      the prompt in instructions/command.md (step-by-step: instructions/README.md)
 python byok/collect_results.py ~/elb-byok-sessions/qwen38-run1 --model-label "strata/qwen-3.8" --serve
 ```
 

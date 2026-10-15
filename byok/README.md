@@ -57,8 +57,9 @@ bench byok mark-start ~/elb-byok-sessions/qwen38-run1
 1. **File > Open Folder…** and open the *session folder* (not this repository).
 2. Open Copilot Chat, switch to **Agent** mode, and select your BYOK model in the model picker
    (`Manage Models…` if it is not listed yet).
-3. Attach `starting_point.md` (drag it into the chat or use `#file:starting_point.md`) and send:
-   > Follow starting_point.md and complete all tasks.
+3. Attach `starting_point.md` (drag it into the chat or use `#file:starting_point.md`) and send
+   the prompt in [instructions/command.md](../instructions/command.md) (also printed by
+   `prepare`). Use the same prompt for every model.
 4. Let it run. Allow it to run terminal commands (pytest, g++, cmake) when asked; its terminal
    needs the tools listed in each `TASK.md`. If it stops early, say "continue with the next
    task in starting_point.md".

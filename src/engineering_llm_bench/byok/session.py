@@ -516,6 +516,13 @@ def _build_attempts(
     return attempts, overlays
 
 
+def agent_prompt() -> str:
+    """The prompt to send to the IDE agent together with starting_point.md (one paragraph,
+    same text as instructions/command.md)."""
+    text = resources.files("engineering_llm_bench.byok").joinpath("command.md").read_text("utf-8")
+    return " ".join(text.split())
+
+
 def trusted_manifest_path(artifacts_dir: Path, session_id: str) -> Path:
     return artifacts_dir / "byok_sessions" / f"{session_id}.json"
 
