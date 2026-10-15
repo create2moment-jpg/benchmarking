@@ -62,7 +62,7 @@ concurrency:
   max_parallel_evaluations: 2
 
 # Commands the built-in agent may run (further restricted per task by allowed_commands).
-command_allowlist: [python, pytest, ruff, g++, cmake, ctest, make]
+command_allowlist: [python, pytest, ruff, g++, cmake, ctest, make, local-binaries]
 
 # Extra regexes to redact from logs/exports (API keys and bearer tokens are covered by default).
 redact_patterns: []

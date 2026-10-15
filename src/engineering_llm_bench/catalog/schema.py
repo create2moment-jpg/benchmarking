@@ -94,12 +94,36 @@ class CommandCheck(_CheckBase):
     parse: Literal["exit", "check_lines"] = "exit"
 
 
+class CppTestCheck(_CheckBase):
+    """Compile C++ sources (candidate code + hidden test) and run the binary. The test prints
+    ``CHECK <name> PASS|FAIL`` lines; score = passed / max(reported, expected_checks)."""
+
+    kind: Literal["cpp_test"]
+    sources: list[str] = Field(min_length=1)
+    include_dirs: list[str] = Field(default_factory=lambda: ["."])
+    std: Literal["c++17", "c++20"] = "c++17"
+    flags: list[str] = Field(default_factory=lambda: ["-O1"])
+    compiler: Literal["g++", "c++", "clang++"] = "g++"
+    expected_checks: int | None = Field(default=None, ge=1)
+
+    _sources = field_validator("sources", "include_dirs")(_safe_relpaths)
+
+    @field_validator("flags")
+    @classmethod
+    def _flags(cls, value: list[str]) -> list[str]:
+        for flag in value:
+            if not flag.startswith(("-O", "-W", "-D", "-g", "-f", "-pthread")) or ".." in flag:
+                raise ValueError(f"unsupported compiler flag {flag!r}")
+        return value
+
+
 class RuffCheck(_CheckBase):
     """Static lint of the candidate's Python files. Score = 1 / (1 + 0.25 * violations)."""
 
     kind: Literal["ruff"]
     targets: list[str] = Field(min_length=1)
     select: list[str] = Field(default_factory=lambda: ["E", "F", "W", "B", "UP", "SIM"])
+    line_length: int = Field(default=100, ge=60, le=200)
 
     _targets = field_validator("targets")(_safe_relpaths)
 
@@ -183,6 +207,7 @@ class FilesExistCheck(_CheckBase):
 CheckSpec = Annotated[
     PytestCheck
     | CommandCheck
+    | CppTestCheck
     | RuffCheck
     | SqlResultCheck
     | TestsDetectBugCheck

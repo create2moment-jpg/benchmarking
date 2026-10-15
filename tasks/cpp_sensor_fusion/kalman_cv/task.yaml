@@ -1,0 +1,43 @@
+schema_version: 1
+id: cpp_sensor_fusion.kalman-cv
+version: 1.0.0
+title: Constant-velocity Kalman filter (C++17)
+domain: cpp_sensor_fusion
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 180
+timeout_s: 600
+skills: [cpp17, kalman-filter, numerical-stability, input-validation]
+tags: [smoke, cpp, sensor-fusion, tracking]
+profiles: [smoke, standard, extended]
+requires: {executables: [g++]}
+allowed_commands: [g++, local-binaries]
+editable_paths: ["kalman_cv.cpp", "kalman_cv.hpp", "tests/*.cpp"]
+expected_artifacts: [kalman_cv.cpp]
+prompt: |
+  Complete `kalman_cv.cpp` so `fusion::ConstantVelocityKF` (declared and documented in
+  `kalman_cv.hpp`) is a correct, numerically robust 1-D constant-velocity Kalman filter.
+
+  Requirements:
+  - `predict(dt)`: propagate state and covariance with F and the continuous white-noise
+    acceleration Q given in the header. `dt == 0` is a no-op; `dt < 0` or non-finite dt throws
+    `std::invalid_argument`.
+  - `update(z)`: standard Kalman update for a position measurement with variance r. Keep P
+    symmetric positive semi-definite over long runs (e.g. Joseph form). A non-finite z throws
+    `std::invalid_argument` and leaves the filter unchanged.
+  - Constructor validates inputs and throws `std::invalid_argument` for: non-finite values,
+    q < 0, r <= 0, asymmetric or non-PSD initial covariance.
+  - Keep the public interface in the header unchanged; C++17, no external libraries.
+  Build/test: g++ -std=c++17 -I. kalman_cv.cpp tests/test_kalman_public.cpp -o kf_public && ./kf_public
+acceptance_criteria:
+  - Hidden numeric tests for predict/update match the reference equations within 1e-9.
+  - Invalid inputs raise std::invalid_argument without corrupting state.
+  - Covariance remains symmetric PSD after 2000 predict/update cycles.
+  - Code compiles warning-free with -Wall -Wextra -Wpedantic -Wshadow.
+checks:
+  - {id: hidden-numeric, kind: cpp_test, dimension: functional, weight: 3, sources: [kalman_cv.cpp, _hidden/test_kalman_hidden.cpp], include_dirs: ["."], flags: ["-O1", "-DELB_GROUP=1"], expected_checks: 7}
+  - {id: input-validation, kind: cpp_test, dimension: robustness, sources: [kalman_cv.cpp, _hidden/test_kalman_hidden.cpp], include_dirs: ["."], flags: ["-O1", "-DELB_GROUP=2"], expected_checks: 5}
+  - {id: public-test, kind: cpp_test, dimension: functional, sources: [kalman_cv.cpp, tests/test_kalman_public.cpp], include_dirs: ["."], regression_guard: true}
+  - {id: warnings-clean, kind: command, dimension: quality, argv: ["g++", "-std=c++17", "-fsyntax-only", "-Wall", "-Wextra", "-Wpedantic", "-Wshadow", "-Werror", "-I.", "kalman_cv.cpp"]}
+  - {id: handoff, kind: summary, dimension: explanation}
+weights: {functional: 60, quality: 15, workflow: 10, explanation: 5, robustness: 10}

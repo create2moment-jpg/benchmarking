@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmark Report</title>
+<style>
+:root { --bg:#fbfbfa; --fg:#1d1f21; --muted:#6b6f76; --line:#e2e3e5; --card:#ffffff;
+        --bar:#3b6fd8; --whisker:#1d1f21; --pass:#1f8a4c; --fail:#c2412d; --warn:#9a6700; --chip:#f0f1f3; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#16181b; --fg:#e6e7e9; --muted:#9aa0a8; --line:#2c3035; --card:#1d2024;
+          --bar:#6f9cf0; --whisker:#e6e7e9; --pass:#4cc184; --fail:#f07a65; --warn:#e0b250; --chip:#262a2f; }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+main { max-width:1200px; margin:0 auto; padding:24px 16px 64px; }
+h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:32px 0 8px; }
+.muted { color:var(--muted); } .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 16px; }
+.table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+th { font-weight:600; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.02em; }
+td.num, th.num { text-align:right; }
+.warn { color:var(--warn); } .pass { color:var(--pass); } .fail { color:var(--fail); }
+.chip { display:inline-block; padding:0 6px; border-radius:4px; background:var(--chip); font-size:12px; }
+svg text { fill:var(--fg); font-size:12px; } svg .axis { stroke:var(--line); }
+ul { margin:4px 0; padding-left:20px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Engineering LLM Benchmark report</h1>
+<div class="muted">{{ r.generator }} &middot; generated {{ r.generated_at }} &middot; {{ r.runs|length }} run(s), {{ r.attempts|length }} attempt(s)
+ &middot; transcripts {{ "included" if r.includes.transcripts else "excluded" }}, source {{ "included" if r.includes.source else "excluded" }}</div>
+
+{% if r.comparability %}
+<h2 class="warn">Comparability warnings</h2>
+<div class="card"><ul>{% for c in r.comparability %}<li>{{ c }}</li>{% endfor %}</ul></div>
+{% endif %}
+
+<h2>Model / harness comparison</h2>
+{% if not r.groups %}<div class="card muted">No runs recorded yet. Run <code>bench run --model fake-reference --profile smoke</code>.</div>{% else %}
+<div class="table-wrap"><table>
+<tr><th>Model</th><th>Harness</th><th>Mode</th><th class="num">Evaluated</th><th class="num">Skipped</th><th class="num">Pass rate</th>
+<th class="num">Score mean</th><th class="num">sd</th><th class="num">min-max</th><th class="num">Wall p50</th><th class="num">Wall p90</th>
+<th class="num">Timeouts</th><th class="num">Tool ok</th><th class="num">Regressions</th><th class="num">Tokens in/out</th><th class="num">Cost</th><th>Notes</th></tr>
+{% for key, g in r.groups.items() %}
+<tr><td>{{ g.model_alias }}</td><td>{{ g.harness }}</td><td>{{ g.mode }}</td>
+<td class="num">{{ g.evaluated }}</td><td class="num">{{ g.skipped }}</td><td class="num">{{ g.pass_rate|fmt(pct=True) }}</td>
+<td class="num">{{ g.score.mean|fmt }}</td><td class="num">{{ g.score.stdev|fmt }}</td><td class="num">{{ g.score.min|fmt(0) }}-{{ g.score.max|fmt(0) }}</td>
+<td class="num">{{ g.wall_time_s.median|fmt }}s</td><td class="num">{{ g.wall_time_s.p90|fmt }}s</td>
+<td class="num">{{ g.timeout_rate|fmt(pct=True) }}</td><td class="num">{{ g.tool_success_rate|fmt(pct=True) }}</td><td class="num">{{ g.regression_rate|fmt(pct=True) }}</td>
+<td class="num">{% if g.usage.input_tokens is not none %}{{ g.usage.input_tokens }}/{{ g.usage.output_tokens }} <span class="muted">({{ g.usage.reported_attempts }}/{{ g.usage.of }})</span>{% else %}unknown{% endif %}</td>
+<td class="num">{% if g.cost_usd.total is not none %}${{ g.cost_usd.total|fmt(4) }} <span class="muted">({{ g.cost_usd.reported_attempts }}/{{ g.cost_usd.of }})</span>{% else %}unknown{% endif %}</td>
+<td>{% for w in g.warnings %}<span class="warn">{{ w }}</span><br>{% endfor %}</td></tr>
+{% endfor %}
+</table></div>
+
+<h2>Mean score with min-max range</h2>
+{% set rowh = 34 %}{% set left = 260 %}{% set width = 520 %}
+<div class="table-wrap" style="padding:8px">
+<svg width="{{ left + width + 140 }}" height="{{ r.groups|length * rowh + 30 }}" role="img" aria-label="Mean score per model and harness">
+{% for tick in [0, 25, 50, 75, 100] %}
+<line class="axis" x1="{{ left + tick * width / 100 }}" y1="0" x2="{{ left + tick * width / 100 }}" y2="{{ r.groups|length * rowh }}"/>
+<text x="{{ left + tick * width / 100 }}" y="{{ r.groups|length * rowh + 16 }}" text-anchor="middle">{{ tick }}</text>
+{% endfor %}
+{% for key, g in r.groups.items() %}{% set y = loop.index0 * rowh %}
+<text x="{{ left - 8 }}" y="{{ y + 21 }}" text-anchor="end">{{ key }}</text>
+{% if g.score.mean is not none %}
+<rect x="{{ left }}" y="{{ y + 8 }}" width="{{ g.score.mean * width / 100 }}" height="18" rx="2" style="fill:var(--bar)"/>
+<line x1="{{ left + g.score.min * width / 100 }}" x2="{{ left + g.score.max * width / 100 }}" y1="{{ y + 17 }}" y2="{{ y + 17 }}" style="stroke:var(--whisker);stroke-width:1.5"/>
+<text x="{{ left + width + 8 }}" y="{{ y + 21 }}">{{ g.score.mean|fmt }} (n={{ g.score.n }})</text>
+{% else %}<text x="{{ left + 4 }}" y="{{ y + 21 }}" class="muted">no scored attempts</text>{% endif %}
+{% endfor %}
+</svg>
+<div class="muted" style="padding:4px 8px">Bars show the mean of 0-100 aggregate scores; the line shows the min-max range across attempts. n is the number of scored attempts.</div>
+</div>
+
+<h2>Per-dimension means (0-1)</h2>
+<div class="table-wrap"><table>
+<tr><th>Model | harness</th>{% for d in dimensions %}<th class="num">{{ d }}</th>{% endfor %}</tr>
+{% for key, g in r.groups.items() %}<tr><td>{{ key }}</td>
+{% for d in dimensions %}{% set s = g.dimensions.get(d) %}<td class="num">{% if s %}{{ s.mean|fmt(2) }} <span class="muted">n={{ s.n }}</span>{% else %}-{% endif %}</td>{% endfor %}</tr>{% endfor %}
+</table></div>
+
+<h2>Per-task results (mean score, passed/evaluated)</h2>
+<div class="table-wrap"><table>
+<tr><th>Task</th>{% for key in r.groups %}<th class="num">{{ key }}</th>{% endfor %}</tr>
+{% for task, cells in r.task_matrix.items() %}<tr><td>{{ task }}</td>
+{% for key in r.groups %}{% set c = cells.get(key) %}<td class="num">{% if not c %}-{% elif c.mean is none %}<span class="muted">{{ c.status|join(",") }}</span>{% else %}{{ c.mean|fmt }} <span class="{{ 'pass' if c.passed == c.n and c.n else 'fail' }}">{{ c.passed }}/{{ c.n }}</span>{% endif %}</td>{% endfor %}</tr>
+{% endfor %}
+</table></div>
+{% endif %}
+
+<h2>Attempts</h2>
+<div class="table-wrap"><table>
+<tr><th>Run</th><th>Model</th><th>Harness</th><th>Task</th><th>Status</th><th>Failure</th><th class="num">Score</th><th class="num">Coverage</th><th>Passed</th><th class="num">Wall s</th><th>Notes</th></tr>
+{% for a in r.attempts %}
+<tr><td class="muted">{{ a.run_id }}</td><td>{{ a.model_alias }}</td><td>{{ a.harness }}</td><td>{{ a.task_id }} <span class="chip">v{{ a.task_version }}</span></td>
+<td>{{ a.status }}</td><td>{{ a.failure_class or "-" }}</td><td class="num">{{ a.score|fmt }}</td><td class="num">{{ a.coverage|fmt(pct=True) }}</td>
+<td>{% if a.passed is none %}-{% elif a.passed %}<span class="pass">yes</span>{% else %}<span class="fail">no</span>{% endif %}</td>
+<td class="num">{{ a.agent_wall_s|fmt }}</td><td class="muted">{{ a.skip_reason or a.error or "" }}</td></tr>
+{% endfor %}
+</table></div>
+
+<h2>Runs</h2>
+<div class="table-wrap"><table>
+<tr><th>Run</th><th>Created</th><th>Status</th><th>Source</th><th>Model</th><th>Provider model id</th><th>Harness</th><th>Profile</th><th>Config fp</th><th>Env fp</th></tr>
+{% for run in r.runs %}<tr><td>{{ run.id }}</td><td>{{ run.created_at }}</td><td>{{ run.status }}</td><td>{{ run.source }}</td><td>{{ run.model_alias }}</td>
+<td>{{ run.provider_model_id or "unknown" }}</td><td>{{ run.harness }} {{ run.harness_version or "" }}</td><td>{{ run.profile or "-" }}</td><td class="muted">{{ run.config_fingerprint }}</td><td class="muted">{{ run.env_fingerprint }}</td></tr>{% endfor %}
+</table></div>
+</main>
+</body>
+</html>

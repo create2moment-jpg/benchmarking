@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Bench Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">engineering-llm-bench <span id="suite" class="muted"></span></div>
+  <nav id="tabs">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="compare">Compare</button>
+    <button data-tab="history">Run history</button>
+    <button data-tab="detail" id="detail-tab" disabled>Attempt detail</button>
+  </nav>
+</header>
+<main>
+  <section id="loading" class="muted">Loading results...</section>
+  <section id="error" class="card error" hidden></section>
+
+  <section id="empty" hidden>
+    <div class="card">
+      <h2>No benchmark runs yet</h2>
+      <p>The dashboard reads persisted results only. Create some first:</p>
+      <pre>bench validate-config
+bench run --model fake-reference --profile smoke     # MOCK adapter: validates the pipeline
+bench run --model local-qwen --profile smoke         # a real local model (Ollama)
+bench dashboard</pre>
+    </div>
+  </section>
+
+  <section id="overview" class="tab" hidden>
+    <div class="tiles" id="tiles"></div>
+    <div id="warnings"></div>
+    <h2>Best mean score by domain</h2>
+    <div class="table-wrap"><table id="best-domain"></table></div>
+    <h2>Latest runs</h2>
+    <div class="table-wrap"><table id="latest-runs"></table></div>
+  </section>
+
+  <section id="compare" class="tab" hidden>
+    <div class="card controls">
+      <div><strong>Models / harnesses</strong> <span class="muted">(select two or more)</span></div>
+      <div id="group-picker" class="picker"></div>
+      <label>Domain <select id="compare-domain"><option value="">all</option></select></label>
+    </div>
+    <div id="compare-warnings"></div>
+    <h2>Aggregate</h2>
+    <div class="table-wrap"><table id="compare-table"></table></div>
+    <h2>Mean score with min-max range</h2>
+    <div class="table-wrap chart" id="compare-chart"></div>
+    <h2>Per dimension (0-1)</h2>
+    <div class="table-wrap"><table id="compare-dims"></table></div>
+    <h2>Per task</h2>
+    <div class="table-wrap"><table id="compare-tasks"></table></div>
+  </section>
+
+  <section id="history" class="tab" hidden>
+    <div class="card controls filters">
+      <label>From <input type="date" id="f-from"></label>
+      <label>To <input type="date" id="f-to"></label>
+      <label>Model <select id="f-model"></select></label>
+      <label>Harness <select id="f-harness"></select></label>
+      <label>Task <select id="f-task"></select></label>
+      <label>Profile <select id="f-profile"></select></label>
+      <label>Provider <select id="f-provider"></select></label>
+      <label>Outcome <select id="f-outcome">
+        <option value="">all</option><option value="pass">passed</option><option value="fail">failed</option>
+        <option value="skipped">skipped</option><option value="interrupted">interrupted</option><option value="error">infra failed</option>
+      </select></label>
+      <label>Config fp <select id="f-config"></select></label>
+    </div>
+    <div class="muted" id="history-count"></div>
+    <div class="table-wrap"><table id="history-table"></table></div>
+  </section>
+
+  <section id="detail" class="tab" hidden></section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

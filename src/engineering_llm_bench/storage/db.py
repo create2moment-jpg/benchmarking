@@ -143,13 +143,40 @@ MIGRATIONS: dict[int, str] = {
 }
 
 ATTEMPT_COLUMNS = (
-    "id", "run_id", "task_id", "task_version", "task_hash", "task_domain", "evaluation_kind",
-    "repeat_index", "status", "failure_class", "skip_reason", "error", "started_at",
-    "finished_at", "agent_wall_s", "eval_wall_s", "turns", "tool_calls", "tool_calls_ok",
-    "malformed_outputs", "input_tokens", "output_tokens", "usage_reliable", "cost_usd", "score",
-    "coverage", "passed", "regression_failed", "summary", "baseline_hash", "final_hash",
-    "artifact_dir", "notes_json",
-)  # fmt: skip
+    "id",
+    "run_id",
+    "task_id",
+    "task_version",
+    "task_hash",
+    "task_domain",
+    "evaluation_kind",
+    "repeat_index",
+    "status",
+    "failure_class",
+    "skip_reason",
+    "error",
+    "started_at",
+    "finished_at",
+    "agent_wall_s",
+    "eval_wall_s",
+    "turns",
+    "tool_calls",
+    "tool_calls_ok",
+    "malformed_outputs",
+    "input_tokens",
+    "output_tokens",
+    "usage_reliable",
+    "cost_usd",
+    "score",
+    "coverage",
+    "passed",
+    "regression_failed",
+    "summary",
+    "baseline_hash",
+    "final_hash",
+    "artifact_dir",
+    "notes_json",
+)
 
 
 def utcnow() -> str:

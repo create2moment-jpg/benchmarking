@@ -289,7 +289,9 @@ class BenchmarkConfig(StrictModel):
     isolation: IsolationConfig = IsolationConfig()
     concurrency: ConcurrencyConfig = ConcurrencyConfig()
     command_allowlist: list[str] = Field(
-        default_factory=lambda: ["python", "pytest", "ruff", "g++", "c++", "cmake", "ctest", "make"]
+        default_factory=lambda: [
+            "python", "pytest", "ruff", "g++", "c++", "cmake", "ctest", "make", "local-binaries"
+        ]
     )
     redact_patterns: list[str] = Field(default_factory=list)
 

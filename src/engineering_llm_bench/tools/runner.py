@@ -36,6 +36,8 @@ from engineering_llm_bench.config.models import LimitsConfig
 from engineering_llm_bench.control import CancelToken
 
 _POLL_S = 0.02
+#: Pseudo-command: when allowlisted, ``./path`` programs built inside the workspace may run.
+LOCAL_BINARIES = "local-binaries"
 
 
 class CommandRefusedError(Exception):
@@ -203,6 +205,10 @@ class CommandRunner:
         if not argv:
             raise CommandRefusedError("empty command")
         name = argv[0]
+        if name.startswith("./") and LOCAL_BINARIES in allowed:
+            return self._run_local_binary(
+                list(argv), cwd, root, scratch, timeout_s, cancel, memory_mb, stdin_text
+            )
         if name not in allowed:
             raise CommandRefusedError(
                 f"command {name!r} is not allowed here; allowed: {', '.join(sorted(allowed))}"
@@ -219,6 +225,35 @@ class CommandRunner:
         mem = self.limits.memory_mb if memory_mb == -1 else memory_mb
         scratch.mkdir(parents=True, exist_ok=True)
         return self._execute(list(argv), full, cwd, scratch, timeout, cancel, mem, stdin_text)
+
+    def _run_local_binary(
+        self,
+        argv: list[str],
+        cwd: Path,
+        root: Path,
+        scratch: Path,
+        timeout_s: float | None,
+        cancel: CancelToken | None,
+        memory_mb: int | None,
+        stdin_text: str | None,
+    ) -> CommandResult:
+        """Run a program built inside the workspace (e.g. a compiled C++ test)."""
+        target = (cwd / argv[0]).resolve()
+        if not target.is_relative_to(root.resolve()) or ".." in PurePosixPath(argv[0]).parts:
+            raise CommandRefusedError(f"{argv[0]!r} is outside the workspace")
+        if not target.is_file() or not os.access(target, os.X_OK):
+            raise CommandRefusedError(f"{argv[0]!r} is not an executable file")
+        for arg in argv[1:]:
+            _check_argument(arg, root, cwd)
+        full = [str(target), *argv[1:]]
+        if self.network_isolated:
+            unshare = shutil.which("unshare")
+            if unshare:
+                full = [unshare, "-rn", "--", *full]
+        timeout = min(timeout_s or self.limits.command_timeout_s, self.limits.command_timeout_s)
+        mem = self.limits.memory_mb if memory_mb == -1 else memory_mb
+        scratch.mkdir(parents=True, exist_ok=True)
+        return self._execute(argv, full, cwd, scratch, timeout, cancel, mem, stdin_text)
 
     def run_trusted(
         self,

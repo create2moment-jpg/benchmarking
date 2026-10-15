@@ -40,6 +40,7 @@ from engineering_llm_bench.environment import (
 )
 from engineering_llm_bench.evaluation.evaluator import EvaluationOutcome, evaluate
 from engineering_llm_bench.harnesses import Harness, HarnessContext, HarnessResult, create_harness
+from engineering_llm_bench.orchestration.records import artifact_rows, evaluation_rows
 from engineering_llm_bench.providers import ManagedProvider, create_provider
 from engineering_llm_bench.redaction import Redactor
 from engineering_llm_bench.storage.artifacts import ArtifactRef, ArtifactStore
@@ -526,41 +527,7 @@ class BenchmarkRunner:
         dims_rows: list[dict[str, Any]] = []
         notes: list[str] = []
         if outcome is not None:
-            for c in outcome.checks:
-                evidence_path = None
-                if c.evidence:
-                    ref = self.artifacts.write_text(
-                        run_id, aid, f"checks/{c.check_id}.log", c.evidence
-                    )
-                    refs.append(ref)
-                    evidence_path = ref.path
-                checks_rows.append(
-                    {
-                        "check_id": c.check_id,
-                        "kind": c.kind,
-                        "dimension": c.dimension.value,
-                        "weight": c.weight,
-                        "status": c.status.value,
-                        "score": c.score,
-                        "source": c.source.value,
-                        "regression_guard": int(c.regression_guard),
-                        "message": self.artifacts.redactor.text(c.message)[:2000],
-                        "duration_s": round(c.duration_s, 3),
-                        "evidence_path": evidence_path,
-                        "details_json": dumps(c.details),
-                    }
-                )
-            for d in outcome.scorecard.dimensions:
-                dims_rows.append(
-                    {
-                        "dimension": d.dimension.value,
-                        "score": d.score,
-                        "weight": d.weight,
-                        "source": d.source.value,
-                        "n_checks": d.n_checks,
-                        "details": d.details,
-                    }
-                )
+            dims_rows, checks_rows = evaluation_rows(outcome, self.artifacts, run_id, aid, refs)
             notes = outcome.scorecard.notes
         usage = result.usage
         cost = None
@@ -621,7 +588,7 @@ class BenchmarkRunner:
             attempt_row,
             dims_rows,
             checks_rows,
-            [{"name": r.name, "path": r.path, "bytes": r.bytes, "sha256": r.sha256} for r in refs],
+            artifact_rows(refs),
         )
         score_txt = f"{card.score:.1f}" if card and card.score is not None else "-"
         self.progress(

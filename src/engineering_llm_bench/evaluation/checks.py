@@ -33,6 +33,7 @@ from engineering_llm_bench.catalog.schema import (
     AddedTestsCheck,
     CheckSpec,
     CommandCheck,
+    CppTestCheck,
     FilesExistCheck,
     PytestCheck,
     RuffCheck,
@@ -44,7 +45,12 @@ from engineering_llm_bench.catalog.schema import (
 from engineering_llm_bench.config.models import LimitsConfig
 from engineering_llm_bench.control import CancelToken
 from engineering_llm_bench.domain import CheckStatus, Dimension, ScoreSource
-from engineering_llm_bench.tools.runner import CommandRefusedError, CommandResult, CommandRunner
+from engineering_llm_bench.tools.runner import (
+    LOCAL_BINARIES,
+    CommandRefusedError,
+    CommandResult,
+    CommandRunner,
+)
 from engineering_llm_bench.workspace.manager import HIDDEN_DIRNAME, Workspace, iter_files
 
 _MAX_JUNIT_BYTES = 5_000_000
@@ -231,9 +237,7 @@ def check_command(spec: CommandCheck, ctx: EvalContext) -> CheckResult:
     if spec.parse == "exit":
         ok = res.exit_code == spec.expect_exit
         return _result(spec, float(ok), f"exit={res.exit_code} (expected {spec.expect_exit})", log)
-    outcomes: dict[str, bool] = {}
-    for name, verdict in _CHECK_LINE.findall(res.stdout):
-        outcomes[name] = outcomes.get(name, True) and verdict == "PASS"
+    outcomes = _score_check_lines(res.stdout)
     if not outcomes:
         return _result(spec, 0.0, f"no CHECK lines (exit={res.exit_code})", log)
     passed = sum(outcomes.values())
@@ -247,6 +251,70 @@ def check_command(spec: CommandCheck, ctx: EvalContext) -> CheckResult:
         log,
         checks=outcomes,
     )
+
+
+# --------------------------------------------------------------------------- C++
+
+
+def _score_check_lines(stdout: str) -> dict[str, bool]:
+    outcomes: dict[str, bool] = {}
+    for name, verdict in _CHECK_LINE.findall(stdout):
+        outcomes[name] = outcomes.get(name, True) and verdict == "PASS"
+    return outcomes
+
+
+def check_cpp_test(spec: CppTestCheck, ctx: EvalContext) -> CheckResult:
+    missing = [s for s in spec.sources if not (ctx.eval_dir / s).is_file()]
+    if missing:
+        return _result(spec, 0.0, f"sources missing: {missing}")
+    binary = f"{HIDDEN_DIRNAME}/elb_{spec.id}.bin"
+    compile_argv = [
+        spec.compiler,
+        f"-std={spec.std}",
+        *spec.flags,
+        *(f"-I{d}" for d in spec.include_dirs),
+        *spec.sources,
+        "-o",
+        binary,
+    ]
+    allowed = ctx.allowlist | {spec.compiler, LOCAL_BINARIES}
+    build = ctx.runner.run(
+        compile_argv,
+        cwd=ctx.eval_dir,
+        root=ctx.eval_dir,
+        scratch=ctx.workspace.scratch,
+        allowed=allowed,
+        timeout_s=spec.timeout_s,
+        cancel=ctx.cancel,
+        memory_mb=None,
+    )
+    if not build.ok:
+        return _result(
+            spec, 0.0, f"compilation failed (exit={build.exit_code})", build.summary(20_000)
+        )
+    run = ctx.runner.run(
+        [f"./{binary}"],
+        cwd=ctx.eval_dir,
+        root=ctx.eval_dir,
+        scratch=ctx.workspace.scratch,
+        allowed=allowed,
+        timeout_s=spec.timeout_s,
+        cancel=ctx.cancel,
+        memory_mb=ctx.memory_mb,
+    )
+    log = build.summary(4000) + "\n\n" + run.summary(20_000)
+    if run.timed_out:
+        return _result(spec, 0.0, "test binary timed out", log)
+    outcomes = _score_check_lines(run.stdout)
+    if not outcomes:
+        return _result(spec, 0.0, f"no CHECK lines (exit={run.exit_code}; crash?)", log)
+    passed = sum(outcomes.values())
+    total = max(len(outcomes), spec.expected_checks or 0)
+    score = passed / total
+    if run.exit_code not in (0, 1):  # crashed part-way (signal, abort)
+        score *= 0.5
+    msg = f"{passed}/{total} checks passed, exit={run.exit_code}"
+    return _result(spec, score, msg, log, checks=outcomes)
 
 
 # --------------------------------------------------------------------------- ruff
@@ -265,6 +333,8 @@ def check_ruff(spec: RuffCheck, ctx: EvalContext) -> CheckResult:
         "json",
         "--select",
         ",".join(spec.select),
+        "--line-length",
+        str(spec.line_length),
         *targets,
     ]
     try:
@@ -518,6 +588,7 @@ def check_files_exist(spec: FilesExistCheck, ctx: EvalContext) -> CheckResult:
 CHECKS: dict[str, Callable[[Any, EvalContext], CheckResult]] = {
     "pytest": check_pytest,
     "command": check_command,
+    "cpp_test": check_cpp_test,
     "ruff": check_ruff,
     "sql_result": check_sql,
     "tests_detect_bug": check_tests_detect_bug,

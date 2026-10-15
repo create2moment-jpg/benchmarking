@@ -1,0 +1,31 @@
+schema_version: 1
+id: debugging.timestamp-sync
+version: 1.0.0
+title: Reproduce and fix a sensor timestamp association defect
+domain: debugging
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 120
+timeout_s: 400
+skills: [debugging, root-cause, regression-tests, sensor-timestamps]
+tags: [smoke, debugging, perception]
+profiles: [smoke, standard, extended]
+allowed_commands: [python, pytest, ruff]
+editable_paths: ["sync.py", "tests/*.py", "NOTES.md"]
+expected_artifacts: [sync.py]
+prompt: |
+  Read BUG_REPORT.md. Reproduce the defect in `sync.py`, identify the root cause, make a minimal
+  fix, and add a regression test to `tests/test_sync.py` that fails on the original code.
+  The docstring of `match_nearest` is the contract; make sure the implementation honours all of it.
+  In your final summary, state the root cause in one sentence.
+acceptance_criteria:
+  - The reported case returns [1]; hidden association cases pass (ties, boundaries, empties).
+  - The documented contract (sorted target, non-negative tolerance) is enforced.
+  - Existing public tests still pass; a new regression test fails on the original code.
+checks:
+  - {id: hidden-association, kind: pytest, dimension: functional, weight: 3, targets: [_hidden/test_hidden_sync.py]}
+  - {id: public-tests, kind: pytest, dimension: functional, targets: [tests], regression_guard: true}
+  - {id: contract, kind: pytest, dimension: robustness, targets: [_hidden/test_hidden_contract.py]}
+  - {id: regression-test-detects-bug, kind: tests_detect_bug, dimension: regression, weight: 2, test_targets: [tests]}
+  - {id: lint, kind: ruff, dimension: quality, targets: [sync.py]}
+  - {id: handoff, kind: summary, dimension: explanation}

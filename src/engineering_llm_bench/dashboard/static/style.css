@@ -1,0 +1,59 @@
+:root {
+  --bg: #f7f7f5; --fg: #1c1e21; --muted: #696e75; --line: #e1e2e4; --card: #ffffff;
+  --accent: #2f62c9; --bar: #3b6fd8; --whisker: #1c1e21; --pass: #1d7f47; --fail: #bf3b26;
+  --warn: #8f6200; --warn-bg: #fff6dc; --chip: #eff0f2; --row-hover: #f2f5fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141619; --fg: #e5e6e8; --muted: #9aa0a7; --line: #2b2f34; --card: #1b1e22;
+    --accent: #7ea6f2; --bar: #6f9cf0; --whisker: #e5e6e8; --pass: #4fc286; --fail: #f2836f;
+    --warn: #e3b552; --warn-bg: #2d2615; --chip: #262a2f; --row-hover: #20252c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.top { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; padding: 10px 16px; }
+.brand { font-weight: 650; }
+nav { display: flex; flex-wrap: wrap; gap: 4px; }
+nav button { border: 1px solid transparent; background: none; color: var(--fg); padding: 6px 10px;
+  border-radius: 6px; cursor: pointer; font: inherit; }
+nav button.active { background: var(--chip); border-color: var(--line); }
+nav button:disabled { color: var(--muted); cursor: default; }
+main { max-width: 1240px; margin: 0 auto; padding: 16px 16px 64px; }
+h2 { font-size: 15px; margin: 24px 0 8px; }
+h3 { font-size: 14px; margin: 16px 0 6px; }
+.muted { color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+.card.error { border-color: var(--fail); color: var(--fail); }
+.warning { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.tile .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile .k { color: var(--muted); font-size: 12px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--row-hover); }
+.pass { color: var(--pass); } .fail { color: var(--fail); } .warn { color: var(--warn); }
+.chip { display: inline-block; padding: 0 6px; border-radius: 4px; background: var(--chip); font-size: 12px; margin-right: 4px; }
+.chip.warn { background: var(--warn-bg); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; }
+.picker { display: flex; flex-wrap: wrap; gap: 6px 14px; width: 100%; }
+.picker label { white-space: nowrap; }
+select, input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 220px; }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; max-height: 480px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.chart { padding: 8px; }
+.chart svg text { fill: var(--fg); font-size: 12px; }
+.chart .axis { stroke: var(--line); }
+.chart .bar { fill: var(--bar); }
+.chart .whisker { stroke: var(--whisker); stroke-width: 1.5; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+a { color: var(--accent); cursor: pointer; }
+@media (max-width: 600px) { main { padding: 12px 16px 48px; } .tile .v { font-size: 18px; } }

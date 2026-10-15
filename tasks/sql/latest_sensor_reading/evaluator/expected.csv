@@ -1,0 +1,5 @@
+sensor_id,kind,ts,value
+cam_left,camera,NULL,NULL
+lidar_roof,lidar,2500,5.5
+radar_front,radar,3000,31.5
+radar_side,radar,5000,50.0

@@ -1,0 +1,36 @@
+schema_version: 1
+id: sql.latest-sensor-reading
+version: 1.0.0
+title: Latest valid reading per active sensor (dedup + nulls)
+domain: sql
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 90
+timeout_s: 300
+skills: [sql, window-functions, deduplication, null-handling]
+tags: [smoke, sql, sqlite]
+profiles: [smoke, standard, extended]
+allowed_commands: [python]
+editable_paths: ["solution.sql", "notes.md"]
+expected_artifacts: [solution.sql]
+prompt: |
+  `solution.sql` should return, for every ACTIVE sensor, its latest valid reading. The current
+  query is wrong. Schema is in `schema.sql` (SQLite 3.35+, window functions available) and a tiny
+  sample dataset is in `sample_data.sql`; the evaluator uses a different hidden dataset.
+
+  Requirements:
+  - Output columns exactly: sensor_id, kind, ts, value - one row per active sensor (active = 1),
+    ordered by sensor_id.
+  - "Latest valid" = the row with the greatest ts whose value IS NOT NULL.
+  - Rows can be re-ingested: several rows may share (sensor_id, ts). Use the one with the
+    greatest ingested_at.
+  - Active sensors with no non-NULL reading must still appear, with NULL ts and value.
+  - Write a single SELECT statement (no DDL/DML). You can test it with python's sqlite3 module.
+acceptance_criteria:
+  - Query returns exactly the expected rows on the hidden dataset, in sensor_id order.
+  - NULL readings, re-ingested duplicates and inactive sensors are handled.
+checks:
+  - {id: hidden-result, kind: sql_result, dimension: functional, weight: 3, engine: sqlite, query_file: solution.sql, setup_sql: seed.sql, expected_csv: expected.csv, ordered: true}
+  - {id: sql-present, kind: files_exist, dimension: workflow, paths: [solution.sql]}
+  - {id: handoff, kind: summary, dimension: explanation}
+weights: {functional: 70, workflow: 15, explanation: 15}
