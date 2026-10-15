@@ -20,14 +20,17 @@ reasoning - with reproducible, independently verified, transparently scored runs
 
 ## Benchmarking a model through Copilot BYOK
 
-If your model is driven by GitHub Copilot agent mode (BYOK), see **[byok/README.md](byok/README.md)**:
+Two commands; the only thing you choose is the model in Copilot's model picker:
 
 ```bash
-python byok/prepare_session.py --profile standard --out ~/elb-byok-sessions/qwen38-run1
-#   -> open that folder in VS Code, attach starting_point.md in Copilot agent mode and send
-#      the prompt in instructions/command.md (step-by-step: instructions/README.md)
-python byok/collect_results.py ~/elb-byok-sessions/qwen38-run1 --model-label "strata/qwen-3.8" --serve
+./byok/start.sh            # sets up Python (first run), creates a session, opens VS Code,
+                           # copies the prompt to the clipboard
+#   -> in the new VS Code window: Copilot Chat, Agent mode, pick your model, paste, Enter
+./byok/finish.sh           # detects the model, scores the session, opens the dashboard
 ```
+
+Details and troubleshooting: [instructions/README.md](instructions/README.md),
+[byok/README.md](byok/README.md).
 
 ## Per-model output folders (invisible to other models)
 
@@ -89,7 +92,8 @@ Tasks whose runtime is missing are reported as **skipped** with the reason - nev
 | `bench report [--run-id R] --format json\|csv\|html [--include-transcripts] [--include-source]` | redacted exports |
 | `bench dashboard [--host --port]` | local dashboard (loopback by default) |
 | `bench import-run --file F [--no-evaluate] [--keep-transcripts]` / `bench export-run` | manual/IDE runs (e.g. Copilot BYOK) |
-| `bench byok prepare` / `bench byok collect` | Copilot BYOK sessions: starting_point.md + collection (same as `byok/*.py`) |
+| `bench byok start` / `bench byok finish` | one-command Copilot BYOK session (used by `byok/start.sh`, `byok/finish.sh`) |
+| `bench byok prepare` / `bench byok collect` | the same in individual steps with all options (`byok/*.py`) |
 | `bench outputs list\|path\|export\|unlock\|lock` | per-model output folders (locked by default) |
 | `bench perf discover\|probe` / `bench run --perf-probe` | model-server info, tokens/s, TTFT, GPU share, session token counters |
 | `bench task validate PATH` | prove fixture fails, reference passes, broken fails |

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -161,6 +162,7 @@ def prepare_session(
     profile: Profile = Profile.STANDARD,
     task_ids: list[str] | None = None,
     allow_inside_repo: bool = False,
+    python_env: Path | None = None,
 ) -> PreparedSession:
     """Create a session folder for an IDE agent. Refuses to overwrite existing content and, by
     default, refuses locations inside the benchmark repository (the agent could otherwise read
@@ -204,10 +206,11 @@ def prepare_session(
             tasks=contexts,
             session_id=session_id,
             total_min=sum(c["estimated_min"] for c in contexts),
+            environment_note=python_env_note(python_env) if python_env else "",
         ),
         encoding="utf-8",
     )
-    write_agent_instructions(out_dir)
+    write_agent_instructions(out_dir, python_env)
     manifest = {
         "format": SESSION_FORMAT,
         "schema_version": 1,
@@ -533,11 +536,28 @@ in the workspace root; every task folder under `tasks/` has a `TASK.md` with its
 """
 
 
-def write_agent_instructions(out_dir: Path) -> None:
+def python_env_note(python_env: Path) -> str:
+    py = python_env / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    return (
+        "\n## Python environment\n\n"
+        f"Python with every package the tasks need (pytest, ruff, numpy, duckdb, torch) is "
+        f"`{py}`. If `python -m pytest` reports a missing module, run the same command with "
+        f"that interpreter, e.g. `{py} -m pytest -q`. Do not install anything.\n"
+    )
+
+
+def write_agent_instructions(out_dir: Path, python_env: Path | None = None) -> None:
     """Always-on agent instructions in the session root (picked up automatically by IDE agents
-    via AGENTS.md / .github/copilot-instructions.md). They do not mention the model."""
+    via AGENTS.md / .github/copilot-instructions.md). They do not mention the model. With
+    ``python_env`` (a venv outside the repository holding the task runtimes), it is named there
+    and selected as the workspace's Python interpreter so new terminals use it."""
+    text = _AGENT_INSTRUCTIONS + (python_env_note(python_env) if python_env else "")
     for rel in ("AGENTS.md", ".github/copilot-instructions.md"):
-        atomic_write_bytes(out_dir / rel, _AGENT_INSTRUCTIONS.encode())
+        atomic_write_bytes(out_dir / rel, text.encode())
+    if python_env is not None:
+        py = python_env / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+        settings = {"python.defaultInterpreterPath": str(py)}
+        atomic_write_bytes(out_dir / ".vscode" / "settings.json", json.dumps(settings).encode())
 
 
 def agent_prompt() -> str:

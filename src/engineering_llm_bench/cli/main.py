@@ -1044,6 +1044,164 @@ def byok_prepare(
     typer.echo(f'     python byok/collect_results.py "{session.path}" --model-label "<your model>"')
 
 
+@byok_app.command("start")
+def byok_start(
+    profile: ProfileOpt = Profile.STANDARD,
+    task: TaskOpt = None,
+    out: Annotated[Path | None, typer.Option(help="Session folder to create.")] = None,
+    python_env: Annotated[
+        Path | None,
+        typer.Option(help="Venv with the task runtimes for the agent's terminal (outside repo)."),
+    ] = None,
+    open_vscode: Annotated[
+        bool, typer.Option("--open/--no-open", help="Open the session in a new VS Code window.")
+    ] = True,
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """One step before the agent runs (used by byok/start.sh): prepare a session, find the model
+    server Copilot uses (for statistics), record the start, copy the prompt to the clipboard and
+    open the session in VS Code."""
+    from engineering_llm_bench.byok import agent_prompt, prepare_session  # noqa: PLC0415
+    from engineering_llm_bench.byok.autodetect import (  # noqa: PLC0415
+        copy_to_clipboard,
+        find_endpoint,
+        open_in_vscode,
+        read_current_session,
+        write_current_session,
+    )
+    from engineering_llm_bench.byok.session import uncollected_sibling_sessions  # noqa: PLC0415
+
+    ctx = load_ctx(config, models)
+    pending = read_current_session(ctx.artifacts_dir)
+    if pending and (Path(pending["session_dir"]) / "tasks").is_dir():
+        raise _fail(
+            f"session {pending['session_dir']} has not been collected yet; run byok/finish.sh "
+            "first (or delete that folder to discard it)"
+        )
+    target = (out or _default_session_dir()).expanduser()
+    others = uncollected_sibling_sessions(target)
+    if others:
+        raise _fail(f"{others[0]} still holds an uncollected session; collect or delete it first")
+    try:
+        session = prepare_session(
+            ctx.registry, ctx.bench, ctx.artifacts_dir, target, profile, _csv(task),
+            python_env=python_env.expanduser().resolve() if python_env else None,
+        )  # fmt: skip
+    except ConfigError as exc:
+        raise _fail(str(exc)) from None
+    endpoint = find_endpoint()
+    if endpoint is not None:
+        typer.echo(f"model server: {endpoint.base_url} ({endpoint.source})")
+        _record_session_endpoint(
+            ctx, session.session_id, endpoint.base_url, None, None, False, True
+        )
+    else:
+        typer.secho("model server not found: task scores only, no server statistics",
+                    fg=typer.colors.YELLOW)  # fmt: skip
+        from engineering_llm_bench.byok.session import update_trusted_manifest  # noqa: PLC0415
+
+        update_trusted_manifest(
+            ctx.artifacts_dir, session.session_id, "perf", {"started_at_epoch": time.time()}
+        )
+    write_current_session(
+        ctx.artifacts_dir,
+        {
+            "session_dir": str(session.path),
+            "session_id": session.session_id,
+            "endpoint": endpoint.base_url if endpoint else None,
+            "started_at_epoch": time.time(),
+        },
+    )
+    prompt = agent_prompt()
+    copied = copy_to_clipboard(prompt)
+    opened = open_vscode and open_in_vscode(session.path)
+    typer.secho(f"\nsession ready: {session.path} ({len(session.tasks)} tasks)",
+                fg=typer.colors.GREEN)  # fmt: skip
+    typer.echo("")
+    if not opened:
+        typer.echo(f'  0. Open the folder in VS Code: code -n "{session.path}"')
+    typer.echo(
+        "  1. In the new VS Code window: Copilot Chat -> Agent mode -> pick your BYOK model."
+    )
+    if copied:
+        typer.echo("  2. Paste the prompt (it is on the clipboard) and press Enter.")
+    else:
+        typer.echo("  2. Paste this prompt and press Enter:\n")
+        typer.echo(textwrap.indent(textwrap.fill(prompt, 92), "     "))
+        typer.echo("")
+    typer.echo("     Click Allow when it asks to run python/pytest/g++/cmake.")
+    typer.echo("  3. When it replies ALL TASKS COMPLETE, run:  ./byok/finish.sh")
+
+
+@byok_app.command("finish")
+def byok_finish(
+    model_label: Annotated[
+        str | None,
+        typer.Option(help="Model name for the dashboard (default: detected from the server)."),
+    ] = None,
+    session_dir: Annotated[
+        Path | None, typer.Option(help="Session to collect (default: the one byok start made).")
+    ] = None,
+    serve: Annotated[bool, typer.Option(help="Open the dashboard afterwards.")] = True,
+    calibration_runs: CalibrationRunsOpt = 3,
+    config: ConfigOpt = None,
+    models: ModelsOpt = None,
+) -> None:
+    """One step after the agent is done (used by byok/finish.sh): detect which model ran, then
+    validate, score and store the session and open the dashboard."""
+    from engineering_llm_bench.byok.autodetect import (  # noqa: PLC0415
+        FoundEndpoint,
+        clear_current_session,
+        endpoint_is_local,
+        guess_model,
+        is_ollama,
+        read_current_session,
+    )
+
+    ctx = load_ctx(config, models)
+    current = read_current_session(ctx.artifacts_dir) or {}
+    target = session_dir or (Path(current["session_dir"]) if current.get("session_dir") else None)
+    if target is None:
+        raise _fail("no session to collect: run byok/start.sh first (or pass --session-dir)")
+    base = current.get("endpoint") if session_dir is None else None
+    endpoint = FoundEndpoint(base, "recorded at start", []) if base else None
+    label = model_label
+    if label is None:
+        guess, choices = guess_model(endpoint)
+        if guess:
+            typer.echo(f"model: {guess} (detected from the model server)")
+            label = guess
+        elif choices and sys.stdin.isatty():
+            for i, name in enumerate(choices, 1):
+                typer.echo(f"  {i}. {name}")
+            pick = typer.prompt("Which model did Copilot use? (number or name)")
+            label = (
+                choices[int(pick) - 1] if pick.isdigit() and 0 < int(pick) <= len(choices) else pick
+            )
+        elif sys.stdin.isatty():
+            label = typer.prompt("Which model did Copilot use (name as shown in Copilot)?")
+        else:
+            raise _fail("could not detect the model; pass --model-label NAME")
+    byok_collect(
+        session_dir=target,
+        model_label=label,
+        provider_label=("ollama" if base and is_ollama(base) else None),
+        remote=(not endpoint_is_local(base)) if base else None,
+        serve=False,
+        calibration_runs=calibration_runs,
+        config=config,
+        models=models,
+    )
+    if session_dir is None:
+        clear_current_session(ctx.artifacts_dir)
+    if serve:
+        from engineering_llm_bench.dashboard.server import serve as serve_dashboard  # noqa: PLC0415
+
+        typer.echo("dashboard: http://127.0.0.1:8765  (Ctrl-C to stop)")
+        serve_dashboard(ctx.store(), ctx.artifacts(), ctx.redactor, "127.0.0.1", 8765)
+
+
 @byok_app.command("collect")
 def byok_collect(
     session_dir: Annotated[Path, typer.Argument(help="Session folder created by `byok prepare`.")],
