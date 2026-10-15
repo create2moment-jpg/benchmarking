@@ -1,45 +1,37 @@
-# Instructions for the model under test
-
-`command.md` is the prompt you send to the agent (GitHub Copilot agent mode with your BYOK
-model). It is the same for every model, so results stay comparable, and it names no model or
-serving stack.
-
-## Run everything
+# Running a model through Copilot BYOK
 
 ```bash
-./byok/start.sh          # in a terminal, inside this repository (smoke: ./byok/start.sh smoke)
+./setup.sh          # in a terminal, inside this repository   (quick test: ./setup.sh smoke)
 ```
 
-A new VS Code window opens with the session folder and the prompt is on the clipboard (if no
-clipboard tool is installed, it is printed: copy it from the terminal or from `command.md`).
+A new VS Code window opens on a fresh session folder. Then:
 
-1. In that window: **Copilot Chat → Agent mode → pick your BYOK model** (the only choice
-   you make).
-2. Paste (Ctrl+V) and press Enter. Nothing needs to be attached: the prompt points the agent
-   at `starting_point.md` in the open folder.
-3. If it stops before replying `ALL TASKS COMPLETE`, send:
-   `Continue with the next unfinished task in starting_point.md, following the same rules.`
+1. If VS Code asks whether you trust the folder's authors, answer **Yes** (needed for the
+   auto-approved commands).
+2. **Copilot Chat → Agent → pick your model.**
+3. **Paste (Ctrl+V) → Enter.** The prompt ([command.md](command.md)) is on the clipboard.
+
+When the agent replies `ALL TASKS COMPLETE`:
 
 ```bash
-./byok/finish.sh         # detects the model, scores, opens the dashboard
+./finish.sh         # scores the run and opens the dashboard
 ```
 
-If `start.sh` cannot open VS Code (no `code` command on the PATH: in VS Code run
-**Shell Command: Install 'code' command in PATH**), open the printed folder with
-**File > Open Folder…** in a **new window**.
+For the next model, run `./setup.sh` again.
 
 ## Troubleshooting
 
-| What you see | Cause and fix |
+| What you see | Fix |
 |---|---|
-| "No starting_point.md exists … this workspace is the benchmark harness" | VS Code has this repository open. Use the window `./byok/start.sh` opened (its Explorer shows `starting_point.md`, `AGENTS.md`, `tasks/`). The repository's `AGENTS.md` tells agents to stop here instead of searching. |
-| Agent replies `NO SESSION FOLDER OPEN` | Same cause: the open workspace has no `starting_point.md` at its root. |
-| A **Run bash command? Allow / Skip** box for every command | That is VS Code's tool approval, not the benchmark; the prompt cannot change it. You can click **Allow** each time; use the arrow next to **Allow** to allow that command for the session; or change the approval level in the picker under the chat input ("Default Approvals"). Decide this yourself: auto-approved commands run as your user, outside the benchmark's sandbox. Approve only the commands the tasks need (`python`, `pytest`, `ruff`, `g++`, `cmake`, `ctest`, `./<test binary>`), never `rm`, `curl`, `pip` or `git`. |
-| "Continue to iterate?" after many steps | VS Code's per-request step limit; click **Continue**, or raise `chat.agent.maxRequests` in your user settings. |
-| Agent stops after one task | Send the continue message from step 3. |
-| `python -m pytest`: "No module named pytest" in the agent's terminal | The session points VS Code at `~/elb-byok-sessions/.runtime-venv`; open a new terminal, or the agent uses that interpreter's full path (listed in `AGENTS.md`). |
-| `finish.sh` asks which model ran | The server no longer has exactly one model loaded; type the name you picked in Copilot, or pass `--model-label`. |
-| `start.sh`: "has not been collected yet" | Run `./byok/finish.sh` for the previous session first (or delete that folder to discard it). |
+| VS Code does not open | Install the `code` command (in VS Code: **Shell Command: Install 'code' command in PATH**), or open the printed folder with **File > Open Folder…** in a new window. |
+| Prompt not on the clipboard | Copy it from the terminal output or from [command.md](command.md). |
+| Agent says there is no `starting_point.md` / `NO SESSION FOLDER OPEN` | The wrong folder is open (e.g. this repository). Use the window `./setup.sh` opened: its Explorer shows `starting_point.md`, `AGENTS.md`, `tasks/`. |
+| Still asked to **Allow** commands | The folder is not trusted (**Manage Workspace Trust** → Trust), or your VS Code version ignores workspace auto-approval: use the approval picker under the chat input. `rm`, `git`, `pip`, `curl`, `find` and similar always ask on purpose. |
+| "Continue to iterate?" | Click **Continue**. |
+| Agent stops before finishing | Send: `Continue with the next unfinished task in starting_point.md.` |
+| "No module named pytest" in the agent's terminal | Open a new terminal in that window; the session selects `~/elb-byok-sessions/.runtime-venv`. |
+| `finish.sh` asks which model ran | Type the name you picked in Copilot, or pass `--model-label NAME`. |
+| `setup.sh`: "has not been collected yet" | Run `./finish.sh` first (or delete that session folder to discard it). |
 
-`bench byok prepare` prints the same prompt; `src/engineering_llm_bench/byok/command.md` is the
-packaged copy (a test keeps both identical).
+Auto-approval lets the agent run the task commands (including `python`, which can run any code)
+as your user without asking. Package managers, network tools, git and deletion still ask.

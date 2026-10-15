@@ -1,4 +1,4 @@
-"""Zero-input helpers for the one-command BYOK workflow (``byok/start.sh``, ``byok/finish.sh``):
+"""Zero-input helpers for the one-command BYOK workflow (``setup.sh``, ``finish.sh``):
 find the model server Copilot uses, guess which model ran, and remember the current session."""
 
 from __future__ import annotations

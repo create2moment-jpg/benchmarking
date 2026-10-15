@@ -9,7 +9,7 @@ for a session, and never read `tasks/` (hidden tests and reference solutions), `
 `.git` to solve benchmark tasks. Reply:
 
 > This is the benchmark repository, not a session folder. In a terminal in this repository
-> run `./byok/start.sh`; it opens the session in a new VS Code window. Use Copilot Chat in
+> run `./setup.sh`; it opens the session in a new VS Code window. Use Copilot Chat in
 > that window.
 
 For development work on the harness itself (when the user asks to change this code), see

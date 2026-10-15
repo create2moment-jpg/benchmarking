@@ -1056,10 +1056,17 @@ def byok_start(
     open_vscode: Annotated[
         bool, typer.Option("--open/--no-open", help="Open the session in a new VS Code window.")
     ] = True,
+    auto_approve: Annotated[
+        bool,
+        typer.Option(
+            help="Let the agent run the tasks' commands (python, pytest, g++, cmake, ...) and "
+            "edit task files without a confirmation click; rm, git, pip, curl etc. still ask."
+        ),
+    ] = False,
     config: ConfigOpt = None,
     models: ModelsOpt = None,
 ) -> None:
-    """One step before the agent runs (used by byok/start.sh): prepare a session, find the model
+    """One step before the agent runs (used by setup.sh): prepare a session, find the model
     server Copilot uses (for statistics), record the start, copy the prompt to the clipboard and
     open the session in VS Code."""
     from engineering_llm_bench.byok import agent_prompt, prepare_session  # noqa: PLC0415
@@ -1076,7 +1083,7 @@ def byok_start(
     pending = read_current_session(ctx.artifacts_dir)
     if pending and (Path(pending["session_dir"]) / "tasks").is_dir():
         raise _fail(
-            f"session {pending['session_dir']} has not been collected yet; run byok/finish.sh "
+            f"session {pending['session_dir']} has not been collected yet; run finish.sh "
             "first (or delete that folder to discard it)"
         )
     target = (out or _default_session_dir()).expanduser()
@@ -1087,6 +1094,7 @@ def byok_start(
         session = prepare_session(
             ctx.registry, ctx.bench, ctx.artifacts_dir, target, profile, _csv(task),
             python_env=python_env.expanduser().resolve() if python_env else None,
+            auto_approve=auto_approve,
         )  # fmt: skip
     except ConfigError as exc:
         raise _fail(str(exc)) from None
@@ -1130,8 +1138,12 @@ def byok_start(
         typer.echo("  2. Paste this prompt and press Enter:\n")
         typer.echo(textwrap.indent(textwrap.fill(prompt, 92), "     "))
         typer.echo("")
-    typer.echo("     Click Allow when it asks to run python/pytest/g++/cmake.")
-    typer.echo("  3. When it replies ALL TASKS COMPLETE, run:  ./byok/finish.sh")
+    if auto_approve:
+        typer.echo("     If VS Code asks whether you trust the folder's authors, answer Yes")
+        typer.echo("     (the auto-approval settings only apply in a trusted folder).")
+    else:
+        typer.echo("     Click Allow when it asks to run python/pytest/g++/cmake.")
+    typer.echo("  3. When it replies ALL TASKS COMPLETE, run:  ./finish.sh")
 
 
 @byok_app.command("finish")
@@ -1148,7 +1160,7 @@ def byok_finish(
     config: ConfigOpt = None,
     models: ModelsOpt = None,
 ) -> None:
-    """One step after the agent is done (used by byok/finish.sh): detect which model ran, then
+    """One step after the agent is done (used by finish.sh): detect which model ran, then
     validate, score and store the session and open the dashboard."""
     from engineering_llm_bench.byok.autodetect import (  # noqa: PLC0415
         FoundEndpoint,
@@ -1163,7 +1175,7 @@ def byok_finish(
     current = read_current_session(ctx.artifacts_dir) or {}
     target = session_dir or (Path(current["session_dir"]) if current.get("session_dir") else None)
     if target is None:
-        raise _fail("no session to collect: run byok/start.sh first (or pass --session-dir)")
+        raise _fail("no session to collect: run setup.sh first (or pass --session-dir)")
     base = current.get("endpoint") if session_dir is None else None
     endpoint = FoundEndpoint(base, "recorded at start", []) if base else None
     label = model_label

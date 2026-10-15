@@ -14,30 +14,39 @@ The session folder never mentions which model or serving stack you use (Ollama, 
 ...). You give the model's name only to the collector, so the agent sees exactly the same
 task text whichever model you benchmark.
 
-## Quick way: two commands
+## Quick way: `./setup.sh`, then `./finish.sh`
 
 ```bash
-./byok/start.sh        # or: ./byok/start.sh smoke   (4 quick tasks)
+./setup.sh             # or: ./setup.sh smoke   (4 quick tasks)
 ```
 
 * First run only: creates `.venv` in the repo (benchmark + evaluators) and
   `~/elb-byok-sessions/.runtime-venv` (pytest, ruff, numpy, duckdb, CPU PyTorch for the agent's
   terminal; `WITH_TORCH=0` skips PyTorch). Needs Python >= 3.11 (3.12 recommended); warns if
   `g++`/`cmake` are missing.
-* Creates a session folder, finds the model server from your VS Code settings (or a local
-  Ollama), records the start, copies the prompt to the clipboard and opens the session in a new
-  VS Code window.
+* Creates a new, uniquely named session folder; finds the model server from your VS Code
+  settings (or a local Ollama); copies the one-line prompt to the clipboard; opens the session
+  in a new VS Code window.
+* The session's `.vscode/settings.json` auto-approves the commands the tasks need (`python`,
+  `pytest`, `ruff`, `g++`, `cmake`, `ctest`, `make`, `./<test binary>`, read-only helpers) and
+  edits to task files. `rm`, `mv`, `find`, `git`, `pip`, `curl`, `wget`, `sudo` and similar
+  still ask, and `starting_point.md`, `TASK.md`, `.bench/`, `.vscode/` are never auto-edited.
+  VS Code applies these only after you **trust the folder** (answer Yes when it asks).
 
-In that window: **Copilot Chat → Agent → pick your BYOK model → paste → Enter.** Click
-**Allow** for the commands it runs. When it replies `ALL TASKS COMPLETE`:
+In that window: **Copilot Chat → Agent → pick your BYOK model → paste → Enter.** When it
+replies `ALL TASKS COMPLETE`:
 
 ```bash
-./byok/finish.sh       # or: ./byok/finish.sh --model-label "qwen3.8-next"
+./finish.sh            # or: ./finish.sh --model-label "qwen3.8-next"
 ```
 
 It detects the model that ran (the one loaded on the server; asks you if it cannot tell),
 scores the session, moves the code into the model's private folder, measures the server and
-opens the dashboard. For the next model, run `./byok/start.sh` again.
+opens the dashboard. For the next model, run `./setup.sh` again.
+
+**Auto-approval note:** an approved `python` can run any Python code, so auto-approval means
+the agent runs code as your user without asking. Do it only for models you are willing to let
+do that, or use `bench byok start` without `--auto-approve` and click Allow yourself.
 
 The sections below are the same workflow in individual steps, with all options.
 

@@ -163,6 +163,7 @@ def prepare_session(
     task_ids: list[str] | None = None,
     allow_inside_repo: bool = False,
     python_env: Path | None = None,
+    auto_approve: bool = False,
 ) -> PreparedSession:
     """Create a session folder for an IDE agent. Refuses to overwrite existing content and, by
     default, refuses locations inside the benchmark repository (the agent could otherwise read
@@ -210,7 +211,7 @@ def prepare_session(
         ),
         encoding="utf-8",
     )
-    write_agent_instructions(out_dir, python_env)
+    write_agent_instructions(out_dir, python_env, auto_approve)
     manifest = {
         "format": SESSION_FORMAT,
         "schema_version": 1,
@@ -546,7 +547,52 @@ def python_env_note(python_env: Path) -> str:
     )
 
 
-def write_agent_instructions(out_dir: Path, python_env: Path | None = None) -> None:
+#: Commands the tasks' verification steps need (plus read-only helpers). Auto-approved only when
+#: the user opts in (`bench byok start --auto-approve`, used by setup.sh).
+AUTO_APPROVED_COMMANDS = (
+    "python", "python3", "pytest", "ruff", "g++", "c++", "cmake", "ctest", "make",
+    "cd", "ls", "pwd", "cat", "head", "tail", "wc", "grep", "diff", "echo", "mkdir",
+)  # fmt: skip
+#: Never auto-approved, even when chained after an approved command.
+NEVER_APPROVED_COMMANDS = (
+    "rm", "rmdir", "mv", "dd", "sudo", "su", "chmod", "chown", "kill", "pkill", "find",
+    "curl", "wget", "ssh", "scp", "git", "pip", "pip3", "uv", "conda", "apt", "apt-get",
+    "brew", "npm", "npx",
+)  # fmt: skip
+
+
+def vscode_settings(python_env: Path | None, auto_approve: bool) -> dict[str, Any]:
+    """Workspace settings for the session folder. With ``auto_approve`` the agent can run the
+    tasks' commands and edit task files without a confirmation click; package managers, network
+    tools, git and deletion still ask, and the session's control files are never auto-edited."""
+    settings: dict[str, Any] = {}
+    if python_env is not None:
+        py = python_env / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+        settings["python.defaultInterpreterPath"] = str(py)
+        settings["python.terminal.activateEnvironment"] = True
+    if auto_approve:
+        commands: dict[str, bool] = {c: True for c in AUTO_APPROVED_COMMANDS}
+        if python_env is not None:
+            commands[str(python_env / "bin" / "python")] = True
+        commands["/^\\.\\/[\\w./-]+$/"] = True  # test binaries the agent built: ./build/test_x
+        commands.update({c: False for c in NEVER_APPROVED_COMMANDS})
+        settings["chat.tools.terminal.autoApprove"] = commands
+        settings["chat.tools.edits.autoApprove"] = {
+            "**/*": True,
+            "**/TASK.md": False,
+            "**/starting_point.md": False,
+            "**/AGENTS.md": False,
+            "**/.bench/**": False,
+            "**/.vscode/**": False,
+            "**/.github/**": False,
+        }
+        settings["chat.agent.maxRequests"] = 500
+    return settings
+
+
+def write_agent_instructions(
+    out_dir: Path, python_env: Path | None = None, auto_approve: bool = False
+) -> None:
     """Always-on agent instructions in the session root (picked up automatically by IDE agents
     via AGENTS.md / .github/copilot-instructions.md). They do not mention the model. With
     ``python_env`` (a venv outside the repository holding the task runtimes), it is named there
@@ -554,10 +600,11 @@ def write_agent_instructions(out_dir: Path, python_env: Path | None = None) -> N
     text = _AGENT_INSTRUCTIONS + (python_env_note(python_env) if python_env else "")
     for rel in ("AGENTS.md", ".github/copilot-instructions.md"):
         atomic_write_bytes(out_dir / rel, text.encode())
-    if python_env is not None:
-        py = python_env / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-        settings = {"python.defaultInterpreterPath": str(py)}
-        atomic_write_bytes(out_dir / ".vscode" / "settings.json", json.dumps(settings).encode())
+    settings = vscode_settings(python_env, auto_approve)
+    if settings:
+        atomic_write_bytes(
+            out_dir / ".vscode" / "settings.json", json.dumps(settings, indent=2).encode()
+        )
 
 
 def agent_prompt() -> str:

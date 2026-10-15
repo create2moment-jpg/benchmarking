@@ -64,12 +64,17 @@ def test_start_then_finish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         res = cli.invoke(
             app,
             ["byok", "start", "--task", "python.fix-interval-merge", "--out", str(session),
-             "--python-env", str(runtime), "--no-open"],
+             "--python-env", str(runtime), "--no-open", "--auto-approve"],
         )  # fmt: skip
         assert res.exit_code == 0, res.output
         assert "on the clipboard" in res.output and "finish.sh" in res.output
         settings = json.loads((session / ".vscode/settings.json").read_text())
         assert settings["python.defaultInterpreterPath"].startswith(str(runtime))
+        approve = settings["chat.tools.terminal.autoApprove"]
+        assert approve["pytest"] is True and approve["g++"] is True
+        assert approve["rm"] is False and approve["git"] is False and approve["pip"] is False
+        edits = settings["chat.tools.edits.autoApprove"]
+        assert edits["**/*"] is True and edits["**/TASK.md"] is False
         assert str(runtime) in (session / "AGENTS.md").read_text()
         assert str(runtime) in (session / "starting_point.md").read_text()
         # A second start is refused until this one is collected.
@@ -90,3 +95,10 @@ def test_start_then_finish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert not (tmp_path / "art" / auto.CURRENT_SESSION_FILE).exists()
     res = cli.invoke(app, ["byok", "finish", "--no-serve"])
     assert res.exit_code != 0 and "no session to collect" in res.output
+
+
+def test_no_auto_approve_by_default(tmp_path: Path) -> None:
+    from engineering_llm_bench.byok.session import vscode_settings  # noqa: PLC0415
+
+    assert vscode_settings(None, False) == {}
+    assert "chat.tools.terminal.autoApprove" not in vscode_settings(tmp_path, False)

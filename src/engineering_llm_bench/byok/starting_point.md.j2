@@ -28,13 +28,14 @@ Estimated total: ~{{ total_min }} minutes of focused work.
 
 ## Rules
 
-- Work only inside `tasks/`. Never modify `starting_point.md`, any `TASK.md`, or the `.bench/`
-  folder.
+- Work only inside `tasks/`. Never modify `starting_point.md`, any `TASK.md`, `AGENTS.md`,
+  or the `.bench/`, `.vscode/` and `.github/` folders.
 - Never edit a file that `TASK.md` does not list as editable. Changes to other files are
   discarded and not evaluated. Do not weaken or delete existing tests to make them pass.
 - Hidden tests evaluate every task after you finish. Your own claims in `RESULT.md` are not
   used for scoring, so be honest about what does and does not work.
-- Do not search for hidden tests or reference solutions; they are not on this machine.
+- Do not search for hidden tests or reference solutions; they are not on this machine. Stay
+  inside this workspace and do not probe the environment beyond the commands `TASK.md` lists.
 - Do not install packages and do not use the internet. If a listed command is not available,
   say so in `RESULT.md` and continue.
 - Keep changes focused and production quality: clear code, edge cases handled, no debug
