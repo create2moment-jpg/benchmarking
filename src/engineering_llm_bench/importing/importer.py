@@ -38,7 +38,7 @@ from engineering_llm_bench.workspace.manager import (
 )
 
 MAX_IMPORT_BYTES = 50_000_000
-_PATCH_PATH = re.compile(r"^(?:\+\+\+|---) (?:[ab]/)?(\S+)", re.MULTILINE)
+_HUNK = re.compile(r"^@@ -\d+(,(\d+))? \+\d+(,(\d+))? @@")
 _FORBIDDEN_PATCH = re.compile(r"^(?:new file mode|old mode|new mode|deleted file mode) 12", re.M)
 
 
@@ -63,7 +63,38 @@ def load_import_file(path: Path) -> ImportFile:
 
 
 def patch_paths(patch: str) -> list[str]:
-    return sorted({p for p in _PATCH_PATH.findall(patch) if p != "/dev/null"})
+    """File paths named by a unified diff's headers (hunk bodies are skipped, so removed lines
+    such as ``-- comment`` cannot masquerade as ``--- path`` headers)."""
+    paths: set[str] = set()
+    lines = patch.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        hunk = _HUNK.match(line)
+        if hunk:
+            old = int(hunk.group(2) or 1)
+            new = int(hunk.group(4) or 1)
+            i += 1
+            while i < len(lines) and (old > 0 or new > 0):
+                body = lines[i]
+                if body.startswith("-"):
+                    old -= 1
+                elif body.startswith("+"):
+                    new -= 1
+                elif not body.startswith("\\"):
+                    old -= 1
+                    new -= 1
+                i += 1
+            continue
+        if line.startswith(("--- ", "+++ ")):
+            target = line[4:].split("\t")[0].strip()
+            if target != "/dev/null":
+                paths.add(target[2:] if target.startswith(("a/", "b/")) else target)
+        elif line.startswith("diff --git "):
+            parts = line.split()
+            paths.update(p[2:] for p in parts[2:4] if p.startswith(("a/", "b/")))
+        i += 1
+    return sorted(paths)
 
 
 def validate_patch(patch: str, task: Task, root: Path) -> list[str]:

@@ -171,10 +171,17 @@ def _sleep_cancellable(seconds: float, cancel: CancelToken) -> None:
 class ManagedProvider:
     """Wraps a provider with rate limiting and retry-with-backoff for retryable errors."""
 
-    def __init__(self, inner: Provider, max_retries: int, limiter: RateLimiter) -> None:
+    def __init__(
+        self,
+        inner: Provider,
+        max_retries: int,
+        limiter: RateLimiter,
+        backoff_base_s: float = 1.0,
+    ) -> None:
         self.inner = inner
         self.max_retries = max_retries
         self.limiter = limiter
+        self.backoff_base_s = backoff_base_s
         self.retries_used = 0
 
     @property
@@ -195,7 +202,8 @@ class ManagedProvider:
                 self.limiter.release()
             attempt += 1
             self.retries_used += 1
-            _sleep_cancellable(min(30.0, 2.0**attempt) * (0.5 + random.random()), cancel)  # noqa: S311
+            delay = self.backoff_base_s * 2.0 ** (attempt - 1) * (0.5 + random.random())  # noqa: S311
+            _sleep_cancellable(min(30.0, delay), cancel)
 
     def close(self) -> None:
         self.inner.close()

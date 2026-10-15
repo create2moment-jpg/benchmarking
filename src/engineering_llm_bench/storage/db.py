@@ -272,18 +272,31 @@ class Store:
 
     # ------------------------------------------------------------------ attempts
     def upsert_attempt(self, row: dict[str, Any]) -> None:
+        """Update the attempt's given columns, inserting the row if it does not exist yet.
+
+        (UPDATE-then-INSERT rather than INSERT ... ON CONFLICT, so partial updates of existing
+        rows do not trip NOT NULL constraints on columns they leave out.)
+        """
         unknown = set(row) - set(ATTEMPT_COLUMNS)
         if unknown:
             raise KeyError(f"unknown attempt columns {sorted(unknown)}")
-        cols = ", ".join(row)
-        marks = ", ".join("?" for _ in row)
-        updates = ", ".join(f"{k} = excluded.{k}" for k in row if k != "id")
+        fields = {k: v for k, v in row.items() if k != "id"}
         with self.transaction() as conn:
-            conn.execute(
-                f"INSERT INTO attempts ({cols}) VALUES ({marks}) "  # noqa: S608
-                f"ON CONFLICT(id) DO UPDATE SET {updates}",
-                list(row.values()),
-            )
+            updated = 0
+            if fields:
+                sets = ", ".join(f"{k} = ?" for k in fields)
+                cur = conn.execute(
+                    f"UPDATE attempts SET {sets} WHERE id = ?",  # noqa: S608 - columns allowlisted
+                    [*fields.values(), row["id"]],
+                )
+                updated = cur.rowcount
+            if not updated:
+                cols = ", ".join(row)
+                marks = ", ".join("?" for _ in row)
+                conn.execute(
+                    f"INSERT INTO attempts ({cols}) VALUES ({marks})",  # noqa: S608
+                    list(row.values()),
+                )
 
     def save_evaluation(
         self,
