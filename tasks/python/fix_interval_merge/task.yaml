@@ -1,0 +1,39 @@
+schema_version: 1
+id: python.fix-interval-merge
+version: 1.0.0
+title: Fix sensor-dropout interval merging
+domain: python
+difficulty: easy
+evaluation: executable
+estimated_runtime_s: 60
+timeout_s: 300
+skills: [debugging, edge-cases, pytest]
+tags: [smoke, python, bugfix]
+profiles: [smoke, standard, extended]
+allowed_commands: [python, pytest, ruff]
+editable_paths: ["intervals.py", "tests/*.py"]
+expected_artifacts: [intervals.py]
+prompt: |
+  `intervals.py` merges sensor dropout windows (closed time intervals in seconds) so downstream
+  fusion can mask them. Users report that some windows are not merged and occasionally the
+  output is out of order.
+
+  Fix `merge_intervals` so that it:
+  - accepts intervals in any order and returns a new list sorted by start time;
+  - merges intervals that overlap OR touch (e.g. (1, 2) and (2, 3) -> (1, 3));
+  - raises `ValueError` for an interval whose start is greater than its end or that contains NaN;
+  - does not mutate the input list.
+  Add at least one regression test to `tests/test_intervals.py` that fails on the original code.
+acceptance_criteria:
+  - Hidden tests for ordering, overlap and touching intervals pass.
+  - Invalid intervals raise ValueError; input is not mutated.
+  - Existing public tests still pass.
+  - A new regression test fails against the original implementation.
+checks:
+  - {id: hidden-functional, kind: pytest, dimension: functional, weight: 3, targets: [_hidden/test_hidden_intervals.py]}
+  - {id: public-tests, kind: pytest, dimension: functional, weight: 1, targets: [tests], regression_guard: true}
+  - {id: robustness, kind: pytest, dimension: robustness, targets: [_hidden/test_hidden_robustness.py]}
+  - {id: regression-test-detects-bug, kind: tests_detect_bug, dimension: regression, weight: 2, test_targets: [tests]}
+  - {id: tests-added, kind: added_tests, dimension: regression, weight: 1}
+  - {id: lint, kind: ruff, dimension: quality, targets: [intervals.py]}
+  - {id: handoff, kind: summary, dimension: explanation}

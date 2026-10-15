@@ -1,0 +1,18 @@
+import pytest
+from intervals import merge_intervals
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ([(5.0, 6.0), (0.0, 1.0)], [(0.0, 1.0), (5.0, 6.0)]),
+        ([(1.0, 2.0), (2.0, 3.0)], [(1.0, 3.0)]),
+        ([(2.0, 3.0), (0.0, 1.0), (1.0, 2.0)], [(0.0, 3.0)]),
+        ([(0.0, 10.0), (2.0, 3.0), (4.0, 5.0)], [(0.0, 10.0)]),
+        ([(3.0, 3.0), (3.0, 4.0)], [(3.0, 4.0)]),
+        ([(-2.0, -1.0), (-1.5, 0.5)], [(-2.0, 0.5)]),
+        ([(1.0, 1.0)], [(1.0, 1.0)]),
+    ],
+)
+def test_merge(given: list[tuple[float, float]], expected: list[tuple[float, float]]) -> None:
+    assert merge_intervals(given) == expected

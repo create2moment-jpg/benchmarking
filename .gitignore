@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
+
+# Generated benchmark output (never commit run artifacts)
+artifacts/
+reports/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Task build outputs
+tasks/**/build/

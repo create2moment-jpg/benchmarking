@@ -1,0 +1,68 @@
+# Benchmark settings. Validate with: bench validate-config --config configs/benchmark.example.yaml
+schema_version: 1
+suite_name: engineering-llm-bench
+suite_version: "2026.10.0"
+
+tasks_dir: tasks
+artifacts_dir: artifacts          # generated, gitignored
+database: artifacts/bench.db
+
+# Sending prompts/source to remote providers requires explicit consent. Prefer --allow-remote per run.
+allow_remote_providers: false
+default_harness: agent
+
+# Default dimension weights (normalised to 0-100 over assessed dimensions). Tasks may override.
+weights:
+  functional: 45
+  regression: 15
+  quality: 15
+  robustness: 10
+  workflow: 10
+  explanation: 5
+
+profiles:
+  smoke:
+    description: Quick adapter + repository sanity check (3-5 tasks).
+    max_task_timeout_s: 300
+    run_timeout_s: 1800
+    max_turns: 12
+    max_total_tokens: 120000
+    repeats: 1
+  standard:
+    description: Representative ~12 tasks across domains; aim for 20-45 min per model.
+    max_task_timeout_s: 600
+    run_timeout_s: 5400
+    max_turns: 30
+    max_total_tokens: 400000
+    repeats: 1
+  extended:
+    description: All tasks incl. optional Spark/build/reasoning; may take hours and cost money.
+    max_task_timeout_s: 1200
+    run_timeout_s: 21600
+    max_turns: 50
+    max_total_tokens: 1000000
+    repeats: 2
+    warn_cost: true
+
+limits:
+  command_timeout_s: 180        # per command (agent tool call or evaluator)
+  max_output_bytes: 200000      # per stream, head+tail kept
+  max_file_bytes: 2000000       # agent read/write
+  max_written_file_mb: 128      # RLIMIT_FSIZE
+  memory_mb: 4096               # RLIMIT_AS for small tasks (x2 medium, none for large)
+  cpu_seconds: 600
+  max_observation_chars: 12000
+
+isolation:
+  network: deny_if_possible     # deny | deny_if_possible | allow  (uses `unshare -rn` on Linux)
+  keep_workspaces: false
+
+concurrency:
+  max_parallel_attempts: 1      # do not hammer a single local GPU / provider by default
+  max_parallel_evaluations: 2
+
+# Commands the built-in agent may run (further restricted per task by allowed_commands).
+command_allowlist: [python, pytest, ruff, g++, cmake, ctest, make]
+
+# Extra regexes to redact from logs/exports (API keys and bearer tokens are covered by default).
+redact_patterns: []
