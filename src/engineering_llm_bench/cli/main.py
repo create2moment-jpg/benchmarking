@@ -1029,7 +1029,9 @@ def byok_prepare(
             ctx, session.session_id, endpoint, byok_config, model_id, allow_remote_probe, False
         )
     typer.echo("Next steps:")
-    typer.echo("  1. Open ONLY the session folder in VS Code (File > Open Folder), not this repo.")
+    typer.echo("  1. Open ONLY the session folder in VS Code (File > Open Folder), not this repo:")
+    typer.echo(f'     code "{session.path}"')
+    typer.echo("     (its Explorer must show starting_point.md, AGENTS.md and tasks/ at the top)")
     typer.echo("  2. In Copilot Chat choose Agent mode and your BYOK model, attach")
     typer.echo("     starting_point.md and send this prompt (also in instructions/command.md):")
     typer.echo("")

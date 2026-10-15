@@ -37,6 +37,7 @@ solutions):
 ```
 qwen38-run1/
   starting_point.md            <- give this to the agent
+  AGENTS.md, .github/copilot-instructions.md   <- always-on rules (stay in this folder, ...)
   tasks/01_<task>/TASK.md      <- one folder per task: code + full task contract
   tasks/02_<task>/...
   .bench/session.json          <- manifest (a trusted copy is kept in artifacts/byok_sessions/)
@@ -54,7 +55,9 @@ estimates, and a fresh "before" snapshot of the server's token counters):
 bench byok mark-start ~/elb-byok-sessions/qwen38-run1
 ```
 
-1. **File > Open Folder…** and open the *session folder* (not this repository).
+1. **File > Open Folder…** and open the *session folder* (not this repository - if the agent
+   says there is no starting_point.md, the wrong folder is open). Troubleshooting, including
+   the per-command **Allow** prompts: [instructions/README.md](../instructions/README.md).
 2. Open Copilot Chat, switch to **Agent** mode, and select your BYOK model in the model picker
    (`Manage Models…` if it is not listed yet).
 3. Attach `starting_point.md` (drag it into the chat or use `#file:starting_point.md`) and send

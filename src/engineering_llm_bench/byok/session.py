@@ -207,6 +207,7 @@ def prepare_session(
         ),
         encoding="utf-8",
     )
+    write_agent_instructions(out_dir)
     manifest = {
         "format": SESSION_FORMAT,
         "schema_version": 1,
@@ -514,6 +515,29 @@ def _build_attempts(
             )
         )
     return attempts, overlays
+
+
+_AGENT_INSTRUCTIONS = """\
+# Instructions for this workspace
+
+This workspace is a set of engineering tasks. The full instructions are in `starting_point.md`
+in the workspace root; every task folder under `tasks/` has a `TASK.md` with its contract.
+
+- Work through all tasks in `starting_point.md` in order, without waiting for confirmation.
+- Stay inside this workspace. Do not look for other folders, hidden tests or reference
+  solutions on this machine; they are not available to you.
+- Edit only the files each `TASK.md` lists as editable. Never modify `starting_point.md`, any
+  `TASK.md`, `AGENTS.md`, `.bench/` or `.github/`.
+- Do not install packages and do not use the internet.
+- Write a `RESULT.md` in every task folder (template in `starting_point.md`).
+"""
+
+
+def write_agent_instructions(out_dir: Path) -> None:
+    """Always-on agent instructions in the session root (picked up automatically by IDE agents
+    via AGENTS.md / .github/copilot-instructions.md). They do not mention the model."""
+    for rel in ("AGENTS.md", ".github/copilot-instructions.md"):
+        atomic_write_bytes(out_dir / rel, _AGENT_INSTRUCTIONS.encode())
 
 
 def agent_prompt() -> str:

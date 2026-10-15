@@ -55,6 +55,8 @@ def test_session_contents_hide_evaluators_and_model(bench_env: BenchEnv, tmp_pat
     assert "test_hidden" not in all_text
     reference = (REPO / "tasks/python/fix_interval_merge/reference/intervals.py").read_text()
     assert reference not in all_text
+    for rel in ("AGENTS.md", ".github/copilot-instructions.md"):
+        assert "starting_point.md" in (session / rel).read_text()
     manifest = json.loads((session / ".bench/session.json").read_text())
     assert [t["task_id"] for t in manifest["tasks"]] == sorted(TASKS)
 
@@ -170,6 +172,7 @@ def test_agent_prompt_matches_instructions_folder() -> None:
     assert (REPO / "instructions/command.md").read_text() == packaged
     prompt = agent_prompt()
     assert "starting_point.md" in prompt and "ALL TASKS COMPLETE" in prompt
+    assert "NO SESSION FOLDER OPEN" in prompt  # never search the machine for a session
     assert "\n" not in prompt
     for word in ("ollama", "qwen", "vllm"):
         assert word not in prompt.lower()
