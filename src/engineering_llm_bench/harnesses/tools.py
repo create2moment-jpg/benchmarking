@@ -56,6 +56,12 @@ def write_file(ctx: HarnessContext, path: str, content: str) -> str:
 
 def execute(ctx: HarnessContext, action: AgentAction) -> ToolOutcome:
     """Execute one non-finish action. Policy violations become failed observations."""
+    if action.action not in ctx.task.spec.allowed_tools:
+        return ToolOutcome(
+            f"ERROR: tool {action.action!r} is not available for this task; "
+            f"allowed: {ctx.task.spec.allowed_tools}",
+            False,
+        )
     try:
         if action.action == "list_files":
             rel = _rel(ctx, action.path or ".")

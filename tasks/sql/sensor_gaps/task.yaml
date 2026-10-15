@@ -1,0 +1,34 @@
+schema_version: 1
+id: sql.sensor-gaps
+version: 1.0.0
+title: Heartbeat gap detection with window functions (DuckDB)
+domain: sql
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 120
+timeout_s: 400
+skills: [sql, window-functions, time-series, deduplication]
+tags: [sql, duckdb, time-series]
+profiles: [standard, extended]
+requires: {python_modules: [duckdb]}
+allowed_commands: [python]
+editable_paths: ["solution.sql", "notes.md"]
+expected_artifacts: [solution.sql]
+prompt: |
+  Write `solution.sql` (one DuckDB SELECT statement) that reports heartbeat gaps per sensor.
+  Schema: `schema.sql`; sample data: `sample_data.sql` (the evaluator uses a hidden dataset).
+  You can test with python's `duckdb` module.
+
+  A gap is a pair of CONSECUTIVE distinct timestamps of the same sensor that are MORE than
+  5 seconds apart. Every row is a heartbeat, even when value IS NULL; rows sharing the same
+  (sensor_id, ts) count once. Rows are not stored in time order.
+  Output columns exactly: sensor_id, gap_start (TIMESTAMP), gap_end (TIMESTAMP),
+  gap_seconds (DOUBLE, fractional seconds), ordered by sensor_id, gap_start.
+acceptance_criteria:
+  - Exactly the expected gaps on the hidden dataset, correctly ordered, with fractional seconds.
+  - Duplicates collapsed, NULL-valued rows treated as heartbeats, strict > 5 s threshold.
+checks:
+  - {id: hidden-result, kind: sql_result, dimension: functional, weight: 3, engine: duckdb, query_file: solution.sql, setup_sql: seed.sql, expected_csv: expected.csv, ordered: true}
+  - {id: sql-present, kind: files_exist, dimension: workflow, paths: [solution.sql]}
+  - {id: handoff, kind: summary, dimension: explanation}
+weights: {functional: 70, workflow: 15, explanation: 15}

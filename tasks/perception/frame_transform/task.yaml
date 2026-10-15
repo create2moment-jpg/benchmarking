@@ -1,0 +1,39 @@
+schema_version: 1
+id: perception.frame-transform
+version: 1.0.0
+title: SE(2) frame transforms and pose interpolation
+domain: perception
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 180
+timeout_s: 600
+skills: [coordinate-frames, numpy, numerical-correctness, angle-wrapping]
+tags: [python, numpy, perception, coordinate-frames]
+profiles: [standard, extended]
+requires: {python_modules: [numpy]}
+allowed_commands: [python, pytest, ruff]
+editable_paths: ["frames.py", "tests/*.py"]
+expected_artifacts: [frames.py]
+prompt: |
+  `frames.py` provides SE(2) helpers used for ego-motion compensation. Several functions are
+  wrong. Fix them so that:
+  - `transform_points(points, pose)` maps (N, 2) points from frame B into frame A, where `pose`
+    is B expressed in A (counter-clockwise positive yaw). It returns a NEW array, supports N = 0,
+    and raises ValueError for any shape other than (N, 2).
+  - `compose(a_b, b_c)` returns C in A; `inverse(a_b)` returns A in B. Output yaw is wrapped to
+    [-pi, pi).
+  - `interpolate_pose(p0, t0, p1, t1, t)` interpolates position linearly and yaw along the
+    SHORTEST arc, output yaw wrapped to [-pi, pi). It raises ValueError if t1 <= t0 or t is
+    outside [t0, t1] (no extrapolation).
+  Keep the public API. Add tests.
+acceptance_criteria:
+  - Rotation direction, inverse round-trip and composition are correct.
+  - Yaw interpolation takes the shortest arc across +/-pi.
+  - Shape validation, no mutation, no extrapolation.
+checks:
+  - {id: hidden-frames, kind: pytest, dimension: functional, weight: 3, targets: [_hidden/test_hidden_frames.py]}
+  - {id: public-tests, kind: pytest, dimension: functional, targets: [tests], regression_guard: true}
+  - {id: robustness, kind: pytest, dimension: robustness, targets: [_hidden/test_hidden_robust.py]}
+  - {id: tests-added, kind: added_tests, dimension: regression}
+  - {id: lint, kind: ruff, dimension: quality, targets: [frames.py]}
+  - {id: handoff, kind: summary, dimension: explanation}

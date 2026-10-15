@@ -267,7 +267,7 @@ def doctor(
     """Check runtime, tools, storage and endpoint reachability. Sends no prompts or code."""
     from engineering_llm_bench.environment import collect_environment  # noqa: PLC0415
     from engineering_llm_bench.providers.openai_compat import probe_endpoint  # noqa: PLC0415
-    from engineering_llm_bench.tools.runner import network_namespace_available  # noqa: PLC0415
+    from engineering_llm_bench.tools.runner import isolation_method  # noqa: PLC0415
 
     ctx = load_ctx(config, models)
     env = collect_environment()
@@ -275,10 +275,7 @@ def doctor(
     typer.echo(f"python {env['python']} on {env['platform']}")
     for name, ver in {**env["tools"], **env["python_modules"]}.items():
         typer.echo(f"  {name:<10} {ver or 'not found'}")
-    isolation = "available" if network_namespace_available() else "unavailable"
-    typer.echo(
-        f"network isolation (unshare -rn): {isolation} [policy: {ctx.bench.isolation.network}]"
-    )
+    typer.echo(f"network isolation: {isolation_method()} [policy: {ctx.bench.isolation.network}]")
     try:
         store = ctx.store()
         typer.echo(

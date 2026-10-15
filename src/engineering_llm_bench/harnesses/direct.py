@@ -66,6 +66,9 @@ class DirectHarness:
             return result
         for path, content in parsed.files.items():
             result.tool_calls += 1
+            if "write_file" not in ctx.task.spec.allowed_tools:
+                result.trace.add("write_refused", path=path, error="write_file not allowed")
+                continue
             try:
                 rel = write_file(ctx, path, content)
             except ToolError as exc:

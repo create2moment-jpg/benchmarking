@@ -1,0 +1,34 @@
+schema_version: 1
+id: cpp_sensor_fusion.gated-association
+version: 1.0.0
+title: Gated global-greedy track-to-detection association (C++17)
+domain: cpp_sensor_fusion
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 180
+timeout_s: 600
+skills: [cpp17, data-association, cost-matrix, edge-cases]
+tags: [cpp, sensor-fusion, association]
+profiles: [standard, extended]
+requires: {executables: [g++]}
+allowed_commands: [g++, local-binaries]
+editable_paths: ["association.cpp", "tests/*.cpp"]
+expected_artifacts: [association.cpp]
+prompt: |
+  Implement `fusion::greedy_associate` in `association.cpp` exactly as documented in
+  `association.hpp`. The current implementation is row-wise greedy and can assign the same
+  detection to several tracks; it also mishandles infeasible costs and invalid input.
+  Keep the header unchanged; C++17 standard library only; avoid O(n^3) behaviour for typical
+  sizes (a few hundred tracks/detections).
+  Build/test: g++ -std=c++17 -I. association.cpp tests/test_association_public.cpp -o assoc_public && ./assoc_public
+acceptance_criteria:
+  - Global greedy by cost with the documented tie-breaking; no double assignment.
+  - Gate is inclusive; inf/NaN costs are infeasible; empty matrices handled.
+  - Invalid sizes or gates throw std::invalid_argument.
+  - Compiles warning-free with -Wall -Wextra -Wpedantic -Wshadow -Wconversion.
+checks:
+  - {id: hidden-assignment, kind: cpp_test, dimension: functional, weight: 3, sources: [association.cpp, _hidden/test_association_hidden.cpp], include_dirs: ["."], flags: ["-O1", "-DELB_GROUP=1"], expected_checks: 6}
+  - {id: public-test, kind: cpp_test, dimension: functional, sources: [association.cpp, tests/test_association_public.cpp], include_dirs: ["."], regression_guard: true}
+  - {id: edge-cases, kind: cpp_test, dimension: robustness, sources: [association.cpp, _hidden/test_association_hidden.cpp], include_dirs: ["."], flags: ["-O1", "-DELB_GROUP=2"], expected_checks: 5}
+  - {id: warnings-clean, kind: command, dimension: quality, argv: ["g++", "-std=c++17", "-fsyntax-only", "-Wall", "-Wextra", "-Wpedantic", "-Wshadow", "-Wconversion", "-Werror", "-I.", "association.cpp"]}
+  - {id: handoff, kind: summary, dimension: explanation}

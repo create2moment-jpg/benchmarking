@@ -9,7 +9,8 @@ Safety properties (defence in depth - see docs/security.md for the threat model)
   per-attempt scratch directory;
 * wall-clock timeout (process group killed), CPU / address-space / file-size rlimits;
 * stdout/stderr captured to files and truncated to ``max_output_bytes``;
-* optional network denial via an unprivileged Linux user+network namespace (``unshare -rn``).
+* optional network denial: commands run in a fresh Linux network namespace that has only a
+  loopback interface (created in-process via ``os.unshare``; falls back to ``unshare -rn``).
 
 These controls bound accidents and casual misuse. They are not a substitute for a container or
 VM when running untrusted models against sensitive hosts.
@@ -17,12 +18,15 @@ VM when running untrusted models against sensitive hosts.
 
 from __future__ import annotations
 
+import fcntl
 import functools
 import importlib.util
 import os
 import resource
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -75,9 +79,63 @@ class CommandResult:
         return f"$ {' '.join(self.argv)}\n[{status}, {self.duration_s:.1f}s]\n{body}"
 
 
+_SIOCGIFFLAGS = 0x8913
+_SIOCSIFFLAGS = 0x8914
+_IFF_UP = 0x1
+_CLONE_NEWNET = 0x40000000
+_CLONE_NEWUSER = 0x10000000
+
+
+def _write_proc(path: str, text: str) -> None:
+    fd = os.open(path, os.O_WRONLY)
+    try:
+        os.write(fd, text.encode())
+    finally:
+        os.close(fd)
+
+
+def _enter_network_namespace() -> None:
+    """Child-side (after fork, before exec): enter a fresh network namespace that has only a
+    loopback interface, and bring loopback up so local IPC (e.g. Spark's py4j) still works."""
+    unshare = getattr(os, "unshare")  # noqa: B009 - Python >= 3.12 only; guarded by caller
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0:
+        unshare(_CLONE_NEWNET)
+    else:
+        unshare(_CLONE_NEWUSER | _CLONE_NEWNET)
+        _write_proc("/proc/self/setgroups", "deny")
+        _write_proc("/proc/self/uid_map", f"{uid} {uid} 1")
+        _write_proc("/proc/self/gid_map", f"{gid} {gid} 1")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        req = struct.pack("16sH", b"lo", 0)
+        flags = struct.unpack("16sH", fcntl.ioctl(sock, _SIOCGIFFLAGS, req)[:18])[1]
+        fcntl.ioctl(sock, _SIOCSIFFLAGS, struct.pack("16sH", b"lo", flags | _IFF_UP))
+
+
 @functools.cache
-def network_namespace_available() -> bool:
-    """True when ``unshare -rn`` works for this user (Linux only)."""
+def _inprocess_netns_available() -> bool:
+    if sys.platform != "linux" or not hasattr(os, "unshare"):
+        return False
+    probe = (
+        "import socket\n"
+        "s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen()\n"
+        "c = socket.create_connection(s.getsockname(), timeout=2)\n"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            timeout=10,
+            check=False,
+            preexec_fn=_enter_network_namespace,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+@functools.cache
+def _unshare_binary_available() -> bool:
     exe = shutil.which("unshare")
     if exe is None or sys.platform != "linux":
         return False
@@ -86,6 +144,20 @@ def network_namespace_available() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return proc.returncode == 0
+
+
+def network_namespace_available() -> bool:
+    """True when commands can be run without external network on this host (Linux)."""
+    return _inprocess_netns_available() or _unshare_binary_available()
+
+
+def isolation_method() -> str:
+    """Human-readable description of the network isolation in effect."""
+    if _inprocess_netns_available():
+        return "network namespace (loopback only)"
+    if _unshare_binary_available():
+        return "unshare -rn (no network, loopback down)"
+    return "none"
 
 
 def _python_module_cmd(module: str) -> list[str] | None:
@@ -142,7 +214,7 @@ class CommandRunner:
     def __post_init__(self) -> None:
         if self.network == "deny" and not network_namespace_available():
             raise CommandRefusedError(
-                "isolation.network=deny but user network namespaces (unshare -rn) are unavailable;"
+                "isolation.network=deny but Linux network namespaces are unavailable here;"
                 " use deny_if_possible, or run inside a container without network"
             )
 
@@ -167,10 +239,23 @@ class CommandRunner:
         env.update(self.extra_env)
         return env
 
-    def _preexec(self, memory_mb: int | None) -> Callable[[], None]:
+    def _isolate(self, full: list[str], allow_network: bool = False) -> tuple[list[str], bool]:
+        """Return (argv, enter_netns_in_child) according to the network policy."""
+        if allow_network or self.network == "allow":
+            return full, False
+        if _inprocess_netns_available():
+            return full, True
+        unshare = shutil.which("unshare")
+        if unshare and _unshare_binary_available():
+            return [unshare, "-rn", "--", *full], False
+        return full, False
+
+    def _preexec(self, memory_mb: int | None, netns: bool) -> Callable[[], None]:
         limits = self.limits
 
         def apply() -> None:  # runs in the child between fork and exec
+            if netns:
+                _enter_network_namespace()
             cpu = limits.cpu_seconds
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 5))
             fsize = limits.max_written_file_mb * 1024 * 1024
@@ -217,14 +302,13 @@ class CommandRunner:
             for arg in argv[1:]:
                 _check_argument(arg, root, cwd)
         full = [*resolve_executable(name), *argv[1:]]
-        if self.network_isolated:
-            unshare = shutil.which("unshare")
-            if unshare:
-                full = [unshare, "-rn", "--", *full]
+        full, netns = self._isolate(full)
         timeout = min(timeout_s or self.limits.command_timeout_s, self.limits.command_timeout_s)
         mem = self.limits.memory_mb if memory_mb == -1 else memory_mb
         scratch.mkdir(parents=True, exist_ok=True)
-        return self._execute(list(argv), full, cwd, scratch, timeout, cancel, mem, stdin_text)
+        return self._execute(
+            list(argv), full, cwd, scratch, timeout, cancel, mem, stdin_text, netns
+        )
 
     def _run_local_binary(
         self,
@@ -246,14 +330,11 @@ class CommandRunner:
         for arg in argv[1:]:
             _check_argument(arg, root, cwd)
         full = [str(target), *argv[1:]]
-        if self.network_isolated:
-            unshare = shutil.which("unshare")
-            if unshare:
-                full = [unshare, "-rn", "--", *full]
+        full, netns = self._isolate(full)
         timeout = min(timeout_s or self.limits.command_timeout_s, self.limits.command_timeout_s)
         mem = self.limits.memory_mb if memory_mb == -1 else memory_mb
         scratch.mkdir(parents=True, exist_ok=True)
-        return self._execute(argv, full, cwd, scratch, timeout, cancel, mem, stdin_text)
+        return self._execute(argv, full, cwd, scratch, timeout, cancel, mem, stdin_text, netns)
 
     def run_trusted(
         self,
@@ -276,16 +357,12 @@ class CommandRunner:
         exe = shutil.which(full_argv[0]) if full_argv else None
         if exe is None:
             raise CommandRefusedError(f"harness executable {full_argv[:1]} not found")
-        full = [exe, *full_argv[1:]]
-        if not allow_network and self.network_isolated:
-            unshare = shutil.which("unshare")
-            if unshare:
-                full = [unshare, "-rn", "--", *full]
+        full, netns = self._isolate([exe, *full_argv[1:]], allow_network)
         extra = {k: os.environ[k] for k in env_passthrough if k in os.environ}
         scratch.mkdir(parents=True, exist_ok=True)
         runner = CommandRunner(self.limits, "allow", {**self.extra_env, **extra})
         return runner._execute(
-            list(full_argv), full, cwd, scratch, timeout_s, cancel, None, stdin_text
+            list(full_argv), full, cwd, scratch, timeout_s, cancel, None, stdin_text, netns
         )
 
     def _execute(
@@ -298,6 +375,7 @@ class CommandRunner:
         cancel: CancelToken | None,
         memory_mb: int | None,
         stdin_text: str | None,
+        netns: bool = False,
     ) -> CommandResult:
         start = time.monotonic()
         timed_out = cancelled = False
@@ -314,7 +392,7 @@ class CommandRunner:
                     stdout=out_f,
                     stderr=err_f,
                     start_new_session=True,
-                    preexec_fn=self._preexec(memory_mb),  # noqa: PLW1509 - no threads touched
+                    preexec_fn=self._preexec(memory_mb, netns),  # noqa: PLW1509 - no threads touched
                 )
             except OSError as exc:
                 return CommandResult(display_argv, None, "", f"failed to start: {exc}", 0.0)

@@ -1,0 +1,35 @@
+schema_version: 1
+id: python.typed-config-loader
+version: 1.0.0
+title: Validate a typed sensor-rig configuration with precise error paths
+domain: production
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 180
+timeout_s: 600
+skills: [api-contracts, validation, error-handling, typing]
+tags: [python, production, config]
+profiles: [standard, extended]
+allowed_commands: [python, pytest, ruff]
+editable_paths: ["sensor_config.py", "tests/*.py"]
+expected_artifacts: [sensor_config.py]
+prompt: |
+  `load_sensor_configs` in `sensor_config.py` crashes with KeyError/TypeError on bad input and
+  accepts invalid values. Implement the contract documented in its docstring:
+  validate the parsed configuration, return typed `SensorConfig` objects in input order, and on
+  any problem raise `ConfigError` whose `errors` list contains EVERY problem as
+  `(path, message)` with paths like `sensors[1].rate_hz` / `sensors[0].extrinsics.yaw_deg`
+  (unknown keys use their own path, e.g. `sensors[0].fps`; top-level problems use `sensors`
+  or an empty path). Never let KeyError/TypeError escape. Keep the public names unchanged.
+  Add tests for the new behaviour.
+acceptance_criteria:
+  - Valid configs load into the dataclasses with defaults applied.
+  - Every invalid field is reported with the exact path; all errors are aggregated.
+  - Arbitrary malformed input raises ConfigError only.
+checks:
+  - {id: hidden-contract, kind: pytest, dimension: functional, weight: 3, targets: [_hidden/test_hidden_config.py]}
+  - {id: public-tests, kind: pytest, dimension: functional, targets: [tests], regression_guard: true}
+  - {id: malformed-input, kind: pytest, dimension: robustness, targets: [_hidden/test_hidden_robust.py]}
+  - {id: tests-added, kind: added_tests, dimension: regression, min_added: 2}
+  - {id: lint, kind: ruff, dimension: quality, targets: [sensor_config.py]}
+  - {id: handoff, kind: summary, dimension: explanation}

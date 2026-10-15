@@ -1,0 +1,37 @@
+schema_version: 1
+id: spark.dedup-partition
+version: 1.0.0
+title: Deterministic dedup, schema checks and partition column (PySpark)
+domain: spark
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 300
+timeout_s: 900
+resource_profile: large
+skills: [pyspark, deduplication, window-functions, schema-validation, data-engineering]
+tags: [spark, data-engineering, optional-runtime]
+profiles: [extended]
+requires: {executables: [java], python_modules: [pyspark]}
+allowed_commands: [python, pytest, ruff]
+editable_paths: ["pipeline.py", "tests/*.py"]
+expected_artifacts: [pipeline.py]
+prompt: |
+  `pipeline.py` is one step of a telemetry batch job. Implement it per the docstrings:
+  - `validate_schema(df)`: raise ValueError naming EVERY missing column and every column whose
+    Spark type differs from REQUIRED_SCHEMA (compare with `df.dtypes`).
+  - `dedup_latest(df)`: exactly one row per (vehicle_id, event_id); the greatest ingest_ts wins;
+    on an ingest_ts tie the greater speed_mps wins with NULLs last. Must be deterministic
+    (`dropDuplicates` is not). Do not add or drop other columns.
+  - `transform(df)`: validate, drop rows with NULL vehicle_id/event_id/event_ts, dedup, then add
+    `event_date` = DATE of event_ts (the session time zone is UTC).
+  Use the DataFrame API (no collecting to the driver). Local Spark only (master local[1]).
+acceptance_criteria:
+  - Deterministic dedup with the documented tie-breaking; nulls filtered.
+  - event_date computed per event; output columns exactly the input columns plus event_date.
+  - Schema validation reports all problems.
+checks:
+  - {id: hidden-pipeline, kind: pytest, dimension: functional, weight: 3, targets: [_hidden/test_hidden_pipeline.py], timeout_s: 600}
+  - {id: public-tests, kind: pytest, dimension: functional, targets: [tests], regression_guard: true, timeout_s: 600}
+  - {id: schema-validation, kind: pytest, dimension: robustness, targets: [_hidden/test_hidden_schema.py], timeout_s: 600}
+  - {id: lint, kind: ruff, dimension: quality, targets: [pipeline.py]}
+  - {id: handoff, kind: summary, dimension: explanation}

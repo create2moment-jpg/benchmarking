@@ -1,0 +1,39 @@
+schema_version: 1
+id: pytorch.masked-metrics
+version: 1.0.0
+title: Masked reductions, loss and box IoU for padded batches (PyTorch, CPU)
+domain: pytorch
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 180
+timeout_s: 600
+resource_profile: large
+skills: [pytorch, tensor-shapes, masking, numerical-stability]
+tags: [pytorch, ml-engineering, perception]
+profiles: [standard, extended]
+requires: {python_modules: [torch]}
+allowed_commands: [python, pytest, ruff]
+editable_paths: ["metrics.py", "tests/*.py"]
+expected_artifacts: [metrics.py]
+prompt: |
+  Fix the three functions in `metrics.py` so they meet their docstrings for padded batches:
+  - `masked_mean(values [B, T, ...], mask [B, T] bool)`: mean over valid time steps, any number
+    of trailing dims; rows with no valid steps return 0; values at masked positions (even NaN)
+    must not affect the result.
+  - `masked_l1_loss(pred, target, mask)`: mean |pred - target| over valid (b, t, d) elements;
+    0 with a finite (zero) gradient when nothing is valid.
+  - `box_iou(a [N, 4], b [M, 4])`: xyxy IoU matrix; non-overlapping and degenerate boxes give 0,
+    never NaN; supports N or M = 0.
+  Raise ValueError for mask/shape mismatches (non-bool mask, wrong mask shape, boxes not [N, 4]).
+  CPU only; no training. Add tests.
+acceptance_criteria:
+  - Results match straightforward loop implementations; IoU matches known values.
+  - No NaN/inf for empty/degenerate/fully-masked inputs; gradients finite.
+  - Shape validation raises ValueError.
+checks:
+  - {id: hidden-metrics, kind: pytest, dimension: functional, weight: 3, targets: [_hidden/test_hidden_metrics.py]}
+  - {id: public-tests, kind: pytest, dimension: functional, targets: [tests], regression_guard: true}
+  - {id: robustness, kind: pytest, dimension: robustness, targets: [_hidden/test_hidden_robust.py]}
+  - {id: tests-added, kind: added_tests, dimension: regression}
+  - {id: lint, kind: ruff, dimension: quality, targets: [metrics.py]}
+  - {id: handoff, kind: summary, dimension: explanation}

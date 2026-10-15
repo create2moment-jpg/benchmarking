@@ -1,0 +1,51 @@
+schema_version: 1
+id: code_review.log-upload-patch
+version: 1.0.0
+title: Security and reliability review of a log-upload patch
+domain: code_review
+difficulty: medium
+evaluation: rubric
+estimated_runtime_s: 150
+timeout_s: 400
+skills: [code-review, security, reliability]
+tags: [review, security, rubric]
+profiles: [standard, extended]
+allowed_commands: []
+allowed_tools: [list_files, read_file, write_file]
+editable_paths: ["review.md"]
+expected_artifacts: [review.md]
+human_review_dimensions: [functional, explanation]
+prompt: |
+  Review the patch in `change.diff` following REVIEW_GUIDE.md and write your review to
+  `review.md`. The function is called from a web dashboard with request parameters.
+  Prioritise real security and reliability risks; for each give severity, the affected line,
+  the concrete failure/attack and a concrete fix. Finish with a verdict.
+acceptance_criteria:
+  - Identifies command injection, path traversal, hardcoded credential, disabled TLS verification,
+    swallowed exception, ignored exit status, and unbounded read / resource handling.
+  - Gives severities, concrete fixes and a "request changes" verdict; no invented issues.
+checks:
+  - id: findings
+    kind: text_rubric
+    dimension: functional
+    weight: 3
+    file: review.md
+    criteria:
+      - {id: command-injection, description: "flags shell command injection", any_of: ["injection"], all_of: ["shell"], weight: 3}
+      - {id: path-traversal, description: "flags path traversal via run_id", any_of: ["traversal", "\\.\\./", "escape[sd]? (the )?(log ?dir|directory)"], weight: 3}
+      - {id: hardcoded-secret, description: "flags committed credential", any_of: ["hard-?coded", "committed (secret|token|credential)", "secret store", "rotate"], weight: 2}
+      - {id: tls-disabled, description: "flags verify=False", any_of: ["verify\\s*=\\s*False", "certificate verification", "TLS verification", "man-in-the-middle|MITM"], weight: 2}
+      - {id: swallowed-exception, description: "flags except Exception: pass / undefined meta", any_of: ["swallow", "except Exception", "NameError|UnboundLocalError", "silently"], weight: 1}
+      - {id: exit-status, description: "flags ignored scp exit status", any_of: ["exit (status|code)", "return code", "check=True", "returncode"], weight: 1}
+      - {id: resource-handling, description: "flags unbounded read / unclosed file / missing timeout", any_of: ["unbounded", "context manager", "not closed|never closes|leak", "size limit", "timeout"], weight: 1}
+  - id: review-quality
+    kind: text_rubric
+    dimension: explanation
+    file: review.md
+    criteria:
+      - {id: severities, description: "uses severity labels", any_of: ["severity"], all_of: ["critical|high"]}
+      - {id: verdict, description: "requests changes", any_of: ["request(ed|ing)? changes", "do not merge", "block(ing)? (the )?merge"], none_of: ["\\bapprove\\b(?! or)"]}
+      - {id: fixes, description: "proposes concrete fixes", any_of: ["fix:", "use .*instead", "replace", "argv|list of arguments"]}
+      - {id: no-false-claims, description: "does not invent SQL injection", none_of: ["sql injection"], weight: 0.5}
+  - {id: review-written, kind: files_exist, dimension: workflow, paths: [review.md]}
+weights: {functional: 70, explanation: 20, workflow: 10}

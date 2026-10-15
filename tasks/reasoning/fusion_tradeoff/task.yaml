@@ -1,0 +1,48 @@
+schema_version: 1
+id: reasoning.fusion-tradeoff
+version: 1.0.0
+title: Fusion architecture trade-off note for highway ACC (human review)
+domain: reasoning
+difficulty: hard
+evaluation: human_review
+estimated_runtime_s: 180
+timeout_s: 600
+skills: [system-design, sensor-fusion, technical-writing]
+tags: [reasoning, design, rubric, human-review]
+profiles: [extended]
+allowed_commands: []
+allowed_tools: [list_files, read_file, write_file]
+editable_paths: ["design.md"]
+expected_artifacts: [design.md]
+human_review_dimensions: [functional, explanation]
+prompt: |
+  Read context.md and QUESTION.md, then write design.md as requested. This task is scored by an
+  explicit rubric (deterministic proxy checks below) and is intended for blind human review.
+acceptance_criteria:
+  - A clear recommendation justified against the stated constraints.
+  - Covers timestamps/OOSM, frames/calibration, covariance and correlated tracks, compute,
+    degraded modes and a validation plan.
+checks:
+  - id: rubric
+    kind: text_rubric
+    dimension: functional
+    weight: 3
+    file: design.md
+    criteria:
+      - {id: recommendation, description: "makes an explicit recommendation", any_of: ["recommend", "we (should|choose|propose)"], weight: 2}
+      - {id: both-options, description: "compares early/low-level with late/track-level", all_of: ["early|low-level|raw", "late|track-level|object[- ]level"], weight: 2}
+      - {id: constraints, description: "uses the stated latency/compute constraints", all_of: ["150 ?ms|latency", "CPU|compute|GPU"], weight: 2}
+      - {id: oosm, description: "handles out-of-sequence/latency", any_of: ["out[- ]of[- ]sequence|OOSM|out of order|retrodict"], weight: 2}
+      - {id: frames, description: "addresses frames/calibration", any_of: ["calibrat|extrinsic"]}
+      - {id: correlation, description: "handles correlated supplier tracks", any_of: ["correlat|double[- ]count|covariance intersection"], weight: 2}
+      - {id: degraded, description: "covers degraded modes", any_of: ["degrad|fall ?back|sensor (outage|failure|dropout)"]}
+      - {id: validation, description: "gives a validation plan", any_of: ["validat|replay|ablation|fault injection"]}
+  - {id: design-written, kind: files_exist, dimension: workflow, paths: [design.md]}
+  - id: concise
+    kind: text_rubric
+    dimension: explanation
+    file: design.md
+    criteria:
+      - {id: assumptions, description: "states assumptions", any_of: ["assum"]}
+      - {id: no-hype, description: "avoids unjustified hype", none_of: ["state of the art", "will work well", "best accuracy"]}
+weights: {functional: 70, explanation: 20, workflow: 10}

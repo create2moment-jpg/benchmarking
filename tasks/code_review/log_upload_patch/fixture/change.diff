@@ -1,0 +1,40 @@
+diff --git a/fusion_tools/upload_logs.py b/fusion_tools/upload_logs.py
+new file mode 100644
+--- /dev/null
++++ b/fusion_tools/upload_logs.py
+@@ -0,0 +1,34 @@
++"""Upload replay logs for a run to the analysis server (called from the web dashboard)."""
++import json
++import os
++import subprocess
++
++import requests
++
++API_TOKEN = "fusion-prod-7f3a9c2e41d84b6aa0c1"
++LOG_DIR = "/var/log/fusion"
++
++
++def upload_logs(run_id, dest_host):
++    # run_id and dest_host come straight from the HTTP request query string
++    path = os.path.join(LOG_DIR, run_id)
++    data = open(path).read()
++
++    cmd = f"scp {path} {dest_host}:/uploads/"
++    subprocess.call(cmd, shell=True)
++
++    try:
++        meta = json.loads(data.splitlines()[0])
++    except Exception:
++        pass
++
++    requests.post(
++        f"https://{dest_host}/api/register",
++        json={"run": run_id, "frames": meta["frames"]},
++        headers={"Authorization": f"Bearer {API_TOKEN}"},
++        verify=False,
++    )
++    return meta["frames"]
++
++
++def upload_all(run_ids, dest_host):
++    return [upload_logs(r, dest_host) for r in run_ids]

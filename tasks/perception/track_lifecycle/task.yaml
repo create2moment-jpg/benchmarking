@@ -1,0 +1,42 @@
+schema_version: 1
+id: perception.track-lifecycle
+version: 1.0.0
+title: Track lifecycle and global nearest-neighbour association
+domain: perception
+difficulty: medium
+evaluation: executable
+estimated_runtime_s: 240
+timeout_s: 600
+skills: [tracking, data-association, track-lifecycle, timestamps]
+tags: [python, perception, tracking]
+profiles: [standard, extended]
+allowed_commands: [python, pytest, ruff]
+editable_paths: ["tracker.py", "tests/*.py"]
+expected_artifacts: [tracker.py]
+prompt: |
+  Fix `TrackManager.step` in `tracker.py` so it implements this lifecycle contract exactly:
+
+  Association (per step): consider all (track, detection) pairs with Euclidean distance
+  <= gate; assign greedily in ascending distance order (ties: lower track id, then lower
+  detection index); each track and detection is used at most once. Detections containing a
+  non-finite coordinate are ignored.
+  Matched track: hits += 1, misses = 0, position = detection, last_update_ts = ts; a TENTATIVE
+  track becomes CONFIRMED once hits >= confirm_hits.
+  Unmatched track: misses += 1; a TENTATIVE track is deleted on its first miss; a CONFIRMED
+  track is deleted when misses > max_misses.
+  Unmatched detection: creates a new track (hits = 1; CONFIRMED immediately if confirm_hits == 1,
+  else TENTATIVE). Track ids start at 1, increase by one, and are NEVER reused.
+  Timestamps must be finite and strictly increasing; otherwise raise ValueError and leave the
+  manager unchanged. Constructor: confirm_hits >= 1, max_misses >= 0, finite gate > 0, else
+  ValueError. `step` returns the live tracks sorted by id.
+acceptance_criteria:
+  - Hidden lifecycle tests (deletion, confirmation, id policy, greedy association) pass.
+  - Out-of-order/duplicate timestamps and invalid parameters raise ValueError; NaN detections ignored.
+  - Existing public tests still pass.
+checks:
+  - {id: hidden-lifecycle, kind: pytest, dimension: functional, weight: 3, targets: [_hidden/test_hidden_lifecycle.py]}
+  - {id: public-tests, kind: pytest, dimension: functional, targets: [tests], regression_guard: true}
+  - {id: robustness, kind: pytest, dimension: robustness, targets: [_hidden/test_hidden_robust.py]}
+  - {id: tests-added, kind: added_tests, dimension: regression}
+  - {id: lint, kind: ruff, dimension: quality, targets: [tracker.py]}
+  - {id: handoff, kind: summary, dimension: explanation}
